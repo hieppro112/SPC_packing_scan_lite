@@ -1,0 +1,55 @@
+﻿<Window x:Class="ScaleScanLite.Views.MiniWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Scale Scan Lite - thu nhỏ"
+        Width="284" Height="158"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+        ShowInTaskbar="False" Topmost="True" ResizeMode="NoResize"
+        WindowStartupLocation="Manual">
+
+    <Border CornerRadius="12" Background="{StaticResource DarkBg}" BorderBrush="#3A3F55" BorderThickness="1.5"
+            ClipToBounds="True" MouseLeftButtonDown="Border_MouseLeftButtonDown">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="26"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <!-- Thanh trên -->
+            <Grid Background="#33FFFFFF">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0,0,0">
+                    <Ellipse Style="{StaticResource StatusDot}" Fill="{Binding IsScaleConnected, Converter={StaticResource StatusBrush}}"/>
+                    <TextBlock Text="Scale Scan Lite" Foreground="White" FontSize="11"/>
+                </StackPanel>
+                <Button Grid.Column="1" Content="⤢" Width="28" Height="26" Background="Transparent" BorderThickness="0"
+                        Foreground="White" FontSize="13" Cursor="Hand" ToolTip="Phóng to lại" Click="Restore_Click"/>
+            </Grid>
+
+            <!-- Số cân, mã PO và trạng thái -->
+            <Grid Grid.Row="1">
+                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Margin="12,4,12,10">
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                        <TextBlock Text="{Binding WeightText}" Foreground="White" FontFamily="Consolas" FontSize="36" FontWeight="Bold"/>
+                        <TextBlock Text=" g" Foreground="#C7D0FC" FontSize="14" VerticalAlignment="Bottom" Margin="0,0,0,7"/>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,2,0,0">
+                        <Ellipse Style="{StaticResource StatusDot}" Fill="{Binding IsWeightStable, Converter={StaticResource StatusBrush}}"/>
+                        <TextBlock Text="{Binding PoCode}" Foreground="#C7D0FC" FontFamily="Consolas" FontSize="12"/>
+                    </StackPanel>
+                    <TextBlock Text="{Binding StateText}" Foreground="#9AA3B8" FontSize="11" HorizontalAlignment="Center" Margin="0,3,0,0"/>
+                </StackPanel>
+                <!-- Thông báo nổi -->
+                <Border VerticalAlignment="Bottom" Padding="10,8"
+                        Background="{Binding ToastLevel, Converter={StaticResource NoticeBrush}}"
+                        Visibility="{Binding IsToastVisible, Converter={StaticResource BoolToVis}}">
+                    <TextBlock Text="{Binding ToastMessage}" Foreground="White" FontWeight="SemiBold" FontSize="12"
+                               TextWrapping="Wrap" TextTrimming="None" HorizontalAlignment="Center" TextAlignment="Center"/>
+                </Border>
+            </Grid>
+        </Grid>
+    </Border>
+</Window>
