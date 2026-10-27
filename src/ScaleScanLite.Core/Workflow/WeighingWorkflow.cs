@@ -24,8 +24,15 @@ public enum NoticeLevel
 public sealed record WorkflowNotice(NoticeLevel Level, string Message);
 
 /// <summary>
-/// Luồng nghiệp vụ: quét mã → tra PO → chờ số cân ổn định → lưu → so khối lượng chuẩn.
-/// Có thể được gọi từ nhiều luồng (camera, cổng COM, UI); trạng thái được bảo vệ bằng khóa,
+/// Luồng nghiệp vụ: quét PO → tra PO → chờ số cân ổn định → lưu → so khối lượng chuẩn.
+///
+/// Quy tắc:
+/// - PO được quét SAU CÙNG luôn là PO sẽ được cân: quét nhầm PO1 rồi quét PO2 thì PO1 bị bỏ, số cân lưu cho PO2.
+/// - Mã không đúng dạng PO không làm ảnh hưởng PO đang chờ cân.
+/// - Lưu xong thì xóa PO gần nhất và chờ quét PO mới.
+/// - PO đã cân trước đó mà cân lại thì cập nhật số kg mới (kèm số kg cũ trong thông báo).
+///
+/// Có thể được gọi từ nhiều luồng (máy quét, cổng COM, UI); trạng thái được bảo vệ bằng khóa,
 /// các sự kiện được phát ra ngoài khóa.
 /// </summary>
 public sealed class WeighingWorkflow
@@ -42,7 +49,8 @@ public sealed class WeighingWorkflow
 
     private WorkflowState _state = WorkflowState.Idle;
     private PoInfo? _currentPo;
-    private string? _lastCode;
+    private string? _lookingUp;
+    private string? _queuedCode;
     private double _lastReading;
     private int _generation;
     private StabilityDetector _stability = new(5, 0.005, 0.01);
@@ -69,9 +77,15 @@ public sealed class WeighingWorkflow
 
     public event Action<WorkflowState>? StateChanged;
     public event Action<PoInfo>? PoLoaded;
+
+    /// <summary>PO gần nhất bị xóa (đã cân xong, bị thay bằng PO khác, hết thời gian chờ...): giao diện xóa thông tin PO.</summary>
+    public event Action? PoCleared;
+
     public event Action<WorkflowNotice>? Notice;
     public event Action<double, bool>? WeightChanged;
     public event Action<WeighingOutcome>? Completed;
+
+    /// <summary>Người dùng bấm Reset: xóa toàn bộ trạng thái hiển thị.</summary>
     public event Action? Cleared;
 
     public WorkflowState State
@@ -84,37 +98,52 @@ public sealed class WeighingWorkflow
         get { lock (_gate) return _currentPo; }
     }
 
-    /// <summary>
-    /// Gọi mỗi khi đọc được một mã. Bỏ qua nếu đang bận. Mã trùng với mã vừa xử lý cũng bị bỏ qua
-    /// (camera nhìn thấy cùng một tem liên tục) trừ khi <paramref name="force"/> = true,
-    /// dùng cho máy quét cầm tay vì đó là thao tác cố ý của người dùng.
-    /// </summary>
-    public async Task HandleCodeAsync(string rawCode, bool force = false)
+    /// <summary>Gọi mỗi khi quét hoặc nhập một mã PO.</summary>
+    public async Task HandleCodeAsync(string rawCode)
     {
         var s = _settings();
-        int startGen;
 
-        lock (_gate)
-        {
-            if (_state != WorkflowState.Idle)
-                return;
-
-            if (!force && string.Equals(rawCode, _lastCode, StringComparison.Ordinal))
-                return;
-
-            _lastCode = rawCode;
-            _state = WorkflowState.LookingUpPo;
-            startGen = _generation;
-        }
-
-        Raise(() => StateChanged?.Invoke(WorkflowState.LookingUpPo));
-
+        // Mã không đúng dạng PO: chỉ cảnh báo, không đụng tới PO đang chờ cân.
         if (!PoParser.TryParse(rawCode, s.MinPlainCodeLength, out var aufnr))
         {
             Notify(NoticeLevel.Warning, $"PO không hợp lệ: {Shorten(rawCode)}");
-            SetIdle(startGen);
             return;
         }
+
+        int startGen;
+        bool hadPo;
+        lock (_gate)
+        {
+            if (_state == WorkflowState.Saving)
+            {
+                // Đang lưu PO trước: nhớ mã mới và xử lý ngay sau khi lưu xong.
+                _queuedCode = rawCode;
+                return;
+            }
+
+            if (_state == WorkflowState.WaitingForWeight && string.Equals(_currentPo?.Aufnr, aufnr, StringComparison.Ordinal))
+                return; // quét lại đúng PO đang chờ cân: giữ nguyên tiến độ
+
+            if (_state == WorkflowState.LookingUpPo && string.Equals(_lookingUp, aufnr, StringComparison.Ordinal))
+                return; // đang tra đúng mã này
+
+            // PO quét sau cùng thắng: bỏ PO đang chờ (nếu có) và bắt đầu tra PO mới.
+            hadPo = _currentPo != null;
+            if (hadPo)
+                _log?.Invoke($"Quét PO {aufnr}, bỏ PO {_currentPo!.Aufnr} chưa cân");
+
+            _generation++;
+            startGen = _generation;
+            _currentPo = null;
+            _lookingUp = aufnr;
+            _lastReading = 0;
+            _queuedCode = null;
+            _state = WorkflowState.LookingUpPo;
+        }
+
+        if (hadPo)
+            Raise(() => PoCleared?.Invoke());
+        Raise(() => StateChanged?.Invoke(WorkflowState.LookingUpPo));
 
         PoInfo? po;
         try
@@ -124,16 +153,23 @@ public sealed class WeighingWorkflow
         catch (Exception ex)
         {
             _log?.Invoke("Tra PO lỗi: " + ex);
-            Notify(NoticeLevel.Error, "Không truy vấn được dữ liệu PO: " + ex.Message);
-            lock (_gate) { if (_generation == startGen) _lastCode = null; }
-            SetIdle(startGen);
+            if (IsCurrent(startGen))
+            {
+                Notify(NoticeLevel.Error, "Không truy vấn được dữ liệu PO: " + ex.Message);
+                SetIdle(startGen);
+            }
+
             return;
         }
 
         if (po is null)
         {
-            Notify(NoticeLevel.Warning, $"Không tìm thấy PO {aufnr}");
-            SetIdle(startGen);
+            if (IsCurrent(startGen))
+            {
+                Notify(NoticeLevel.Warning, $"Không tìm thấy PO {aufnr}");
+                SetIdle(startGen);
+            }
+
             return;
         }
 
@@ -141,9 +177,10 @@ public sealed class WeighingWorkflow
         lock (_gate)
         {
             if (_generation != startGen)
-                return; // đã Reset trong lúc tra cứu
+                return; // đã có PO khác được quét (hoặc Reset) trong lúc tra cứu: bỏ kết quả này
 
             _currentPo = po;
+            _lookingUp = null;
             _stability = new StabilityDetector(s.StableCount, s.StableSpreadKg, s.MinWeightKg);
             _lastReading = 0;
             _state = WorkflowState.WaitingForWeight;
@@ -213,7 +250,7 @@ public sealed class WeighingWorkflow
         await SaveAsync(Math.Round(reading, 3), gen).ConfigureAwait(false);
     }
 
-    /// <summary>Xóa PO hiện tại và cho phép quét lại cả mã vừa quét.</summary>
+    /// <summary>Xóa PO hiện tại, hủy chờ cân và đưa mọi thứ về trạng thái sẵn sàng.</summary>
     public void Reset()
     {
         lock (_gate)
@@ -221,7 +258,8 @@ public sealed class WeighingWorkflow
             _generation++;
             _state = WorkflowState.Idle;
             _currentPo = null;
-            _lastCode = null;
+            _lookingUp = null;
+            _queuedCode = null;
             _lastReading = 0;
         }
 
@@ -247,51 +285,89 @@ public sealed class WeighingWorkflow
         if (expected is double e)
             check = WeightCalculator.Check(kg, e, s.ToleranceKg, s.TolerancePercent);
 
-        SaveResult result;
+        SaveOutcome saved;
         try
         {
-            result = await _history.InsertAsync(record, CancellationToken.None).ConfigureAwait(false);
+            saved = await _history.SaveAsync(record, CancellationToken.None).ConfigureAwait(false);
         }
         catch (DataUnavailableException ex)
         {
             _log?.Invoke("Mất kết nối SQL khi lưu: " + ex.Message);
             _pending.Enqueue(record);
-            result = SaveResult.Queued;
+            saved = new SaveOutcome(SaveResult.Queued);
             Notify(NoticeLevel.Warning, "Mất kết nối SQL - đã lưu tạm trên máy, sẽ tự đồng bộ khi có mạng lại.");
         }
         catch (Exception ex)
         {
             _log?.Invoke("Lưu lịch sử lỗi: " + ex);
-            Notify(NoticeLevel.Error, "Lưu thất bại: " + ex.Message);
-            lock (_gate) { if (_generation == gen) _lastCode = null; }
-            SetIdle(gen);
+            Notify(NoticeLevel.Error, "Lưu thất bại: " + ex.Message + " Hãy quét lại PO.");
+            FinishPo(gen);
+            await ProcessQueuedCodeAsync().ConfigureAwait(false);
             return;
         }
 
-        if (result == SaveResult.Duplicate)
-        {
-            Notify(NoticeLevel.Warning, $"PO {po.Aufnr} đã được cân trước đó, không lưu lại.");
-        }
-        else
-        {
-            if (check is { WithinTolerance: false })
-            {
-                try { _errorLog.WriteMismatch(record, po, check); }
-                catch (Exception ex) { _log?.Invoke("Ghi log lệch cân lỗi: " + ex.Message); }
+        bool updated = saved.Result == SaveResult.Updated;
+        string updatedNote = updated && saved.PreviousKg is double prev
+            ? $" (đã cập nhật cân mới, trước đó {prev:0.###} kg)"
+            : "";
 
-                Notify(NoticeLevel.Warning,
-                    $"Lệch khối lượng: cân {kg:0.###} kg, chuẩn {check.Expected:0.###} kg (cho phép ±{check.Allowed:0.###} kg).");
-            }
-            else if (result == SaveResult.Saved)
-            {
-                Notify(NoticeLevel.Success, check is null
-                    ? $"Đã cân {kg:0.###} kg (không có khối lượng chuẩn để so sánh)."
-                    : $"Đã cân {kg:0.###} kg.");
-            }
+        if (check is { WithinTolerance: false })
+        {
+            try { _errorLog.WriteMismatch(record, po, check); }
+            catch (Exception ex) { _log?.Invoke("Ghi log lệch cân lỗi: " + ex.Message); }
+
+            Notify(NoticeLevel.Warning,
+                $"Lệch khối lượng PO {po.Aufnr}: cân {kg:0.###} kg, chuẩn {check.Expected:0.###} kg (cho phép ±{check.Allowed:0.###} kg){updatedNote}.");
+        }
+        else if (updated)
+        {
+            Notify(NoticeLevel.Info, saved.PreviousKg is double p
+                ? $"Đã cập nhật cân mới cho PO {po.Aufnr}: {kg:0.###} kg (trước đó {p:0.###} kg)."
+                : $"Đã cập nhật cân mới cho PO {po.Aufnr}: {kg:0.###} kg.");
+        }
+        else if (saved.Result == SaveResult.Saved)
+        {
+            Notify(NoticeLevel.Success, check is null
+                ? $"Đã cân {kg:0.###} kg (không có khối lượng chuẩn để so sánh)."
+                : $"Đã cân {kg:0.###} kg.");
         }
 
-        Raise(() => Completed?.Invoke(new WeighingOutcome(po, kg, result, check)));
-        SetIdle(gen);
+        Raise(() => Completed?.Invoke(new WeighingOutcome(po, kg, saved.Result, check, saved.PreviousKg)));
+
+        // Cân xong: xóa PO gần nhất, chờ PO mới.
+        FinishPo(gen);
+        await ProcessQueuedCodeAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>Kết thúc PO hiện tại: xóa PO, về trạng thái chờ quét (chỉ khi chưa có Reset/PO khác chen vào).</summary>
+    private void FinishPo(int gen)
+    {
+        lock (_gate)
+        {
+            if (_generation != gen)
+                return;
+
+            _currentPo = null;
+            _lastReading = 0;
+            _state = WorkflowState.Idle;
+        }
+
+        Raise(() => PoCleared?.Invoke());
+        Raise(() => StateChanged?.Invoke(WorkflowState.Idle));
+    }
+
+    /// <summary>Nếu người dùng đã quét PO khác trong lúc đang lưu thì xử lý mã đó ngay bây giờ.</summary>
+    private async Task ProcessQueuedCodeAsync()
+    {
+        string? code;
+        lock (_gate)
+        {
+            code = _queuedCode;
+            _queuedCode = null;
+        }
+
+        if (code != null)
+            await HandleCodeAsync(code).ConfigureAwait(false);
     }
 
     private async Task WaitTimeoutAsync(int gen, int seconds)
@@ -304,13 +380,19 @@ public sealed class WeighingWorkflow
                 return;
 
             _generation++;
+            _currentPo = null;
             _state = WorkflowState.Idle;
-            _lastCode = null;
         }
 
         _scale.StopPolling();
         Notify(NoticeLevel.Warning, "Hết thời gian chờ cân. Vui lòng quét lại mã.");
+        Raise(() => PoCleared?.Invoke());
         Raise(() => StateChanged?.Invoke(WorkflowState.Idle));
+    }
+
+    private bool IsCurrent(int gen)
+    {
+        lock (_gate) return _generation == gen;
     }
 
     private void SetIdle(int gen)
@@ -319,6 +401,7 @@ public sealed class WeighingWorkflow
         {
             if (_generation != gen)
                 return;
+            _lookingUp = null;
             _state = WorkflowState.Idle;
         }
 

@@ -70,8 +70,8 @@ internal sealed class PendingQueue : IPendingQueue, IDisposable
 
                 try
                 {
-                    await _history.InsertAsync(record, CancellationToken.None).ConfigureAwait(false);
-                    synced++; // Saved hoặc Duplicate đều coi là xong
+                    await _history.SaveAsync(record, CancellationToken.None).ConfigureAwait(false);
+                    synced++; // thêm mới hay cập nhật PO đã có đều coi là xong
                 }
                 catch (DataUnavailableException)
                 {

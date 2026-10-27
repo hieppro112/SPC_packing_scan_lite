@@ -17,8 +17,11 @@ public interface IPoRepository
 
 public interface IHistoryRepository
 {
-    /// <summary>Trả về Saved hoặc Duplicate. Ném <see cref="DataUnavailableException"/> khi mất kết nối.</summary>
-    Task<SaveResult> InsertAsync(WeighingRecord record, CancellationToken ct);
+    /// <summary>
+    /// Lưu lượt cân của một PO: chưa có thì thêm mới (Saved); đã có thì cập nhật số kg mới và thời gian mới
+    /// (Updated, kèm số kg cũ). Ném <see cref="DataUnavailableException"/> khi mất kết nối.
+    /// </summary>
+    Task<SaveOutcome> SaveAsync(WeighingRecord record, CancellationToken ct);
 
     Task<HistoryPage> QueryAsync(string? poFilter, bool contains, int page, int pageSize, CancellationToken ct);
 

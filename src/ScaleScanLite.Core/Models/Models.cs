@@ -22,10 +22,18 @@ public sealed record WeighingRecord(
 
 public enum SaveResult
 {
+    /// <summary>PO chưa có trong lịch sử: đã thêm mới.</summary>
     Saved,
-    Duplicate,
+
+    /// <summary>PO đã được cân trước đó: đã cập nhật số kg mới và thời gian mới.</summary>
+    Updated,
+
+    /// <summary>Mất kết nối SQL: đã lưu tạm trên máy, sẽ đồng bộ sau.</summary>
     Queued
 }
+
+/// <summary>Kết quả lưu một lượt cân; <see cref="PreviousKg"/> có giá trị khi là cập nhật (số kg đã lưu trước đó).</summary>
+public sealed record SaveOutcome(SaveResult Result, double? PreviousKg = null);
 
 public sealed record WeightCheckResult(
     double Expected,
@@ -38,4 +46,5 @@ public sealed record WeighingOutcome(
     PoInfo Po,
     double Kg,
     SaveResult Result,
-    WeightCheckResult? Check);
+    WeightCheckResult? Check,
+    double? PreviousKg = null);
