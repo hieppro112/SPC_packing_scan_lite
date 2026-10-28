@@ -103,12 +103,13 @@ public class PendingQueueTests : IDisposable
         public HashSet<string> Existing { get; } = new();
         public List<WeighingRecord> Saved { get; } = new();
 
-        public Task<SaveResult> InsertAsync(WeighingRecord record, CancellationToken ct)
+        public Task<SaveOutcome> SaveAsync(WeighingRecord record, CancellationToken ct)
         {
             if (Offline) throw new DataUnavailableException("offline");
-            if (!Existing.Add(record.Aufnr)) return Task.FromResult(SaveResult.Duplicate);
             Saved.Add(record);
-            return Task.FromResult(SaveResult.Saved);
+            return Task.FromResult(Existing.Add(record.Aufnr)
+                ? new SaveOutcome(SaveResult.Saved)
+                : new SaveOutcome(SaveResult.Updated, 1.0));
         }
 
         public Task<HistoryPage> QueryAsync(string? f, bool c, int p, int s, CancellationToken ct)
@@ -147,16 +148,16 @@ public class PendingQueueTests : IDisposable
     }
 
     [Fact]
-    public async Task Duplicates_are_dropped_from_queue_and_other_errors_keep_the_record()
+    public async Task Records_for_already_weighed_po_update_the_row_and_leave_the_queue()
     {
         using var queue = Create();
         _history.Existing.Add("DUP");
-        queue.Enqueue(Rec("DUP"));
+        queue.Enqueue(Rec("DUP", 2.0));
         queue.Enqueue(Rec("OK"));
 
         Assert.Equal(2, await queue.SyncAsync());
         Assert.Equal(0, queue.Count);
-        Assert.Single(_history.Saved);
+        Assert.Equal(2, _history.Saved.Count);
     }
 
     [Fact]
@@ -275,7 +276,7 @@ public class ScaleServiceTests
 public class DemoAndExportTests
 {
     [Fact]
-    public async Task In_memory_history_inserts_dedupes_filters_and_pages()
+    public async Task In_memory_history_inserts_updates_filters_and_pages()
     {
         var repo = new InMemoryHistoryRepository();
         var first = await repo.QueryAsync(null, false, 1, 10, CancellationToken.None);
@@ -284,8 +285,10 @@ public class DemoAndExportTests
         Assert.True(first.Items[0].Id > first.Items[1].Id);   // mới nhất trước
 
         var rec = new WeighingRecord(0, "9999999999", "P", "H", "L", 1, 2, DateTime.Now);
-        Assert.Equal(SaveResult.Saved, await repo.InsertAsync(rec, CancellationToken.None));
-        Assert.Equal(SaveResult.Duplicate, await repo.InsertAsync(rec, CancellationToken.None));
+        Assert.Equal(new SaveOutcome(SaveResult.Saved), await repo.SaveAsync(rec, CancellationToken.None));
+        var again = await repo.SaveAsync(rec with { Kg = 3.5 }, CancellationToken.None);
+        Assert.Equal(SaveResult.Updated, again.Result);
+        Assert.Equal(2, again.PreviousKg);
 
         var prefix = await repo.QueryAsync("99999", false, 1, 10, CancellationToken.None);
         Assert.Single(prefix.Items);

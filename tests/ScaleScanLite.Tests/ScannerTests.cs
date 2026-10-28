@@ -331,12 +331,12 @@ public class DemoCodeFeederTests
     }
 }
 
-public class WorkflowForceTests
+public class WorkflowRescanTests
 {
     private const string Po = "520006656409";
 
     [Fact]
-    public async Task Force_allows_rescanning_the_same_code_after_a_weighing_without_reset()
+    public async Task Rescanning_the_same_code_after_a_weighing_is_processed_again_without_reset()
     {
         var poRepo = new FakePoRepository();
         poRepo.Data[Po] = new PoInfo(Po, "P", "H", "L", 2, 30, 3);
@@ -348,28 +348,10 @@ public class WorkflowForceTests
         await workflow.OnScaleReadingAsync(20);
         await workflow.OnScaleReadingAsync(20);
         Assert.Equal(1, poRepo.Calls);
+        Assert.Null(workflow.CurrentPo);                  // đã cân xong: PO được xóa, chờ PO mới
 
-        await workflow.HandleCodeAsync(Po);               // camera: bỏ qua vì trùng mã vừa xử lý
-        Assert.Equal(1, poRepo.Calls);
-
-        await workflow.HandleCodeAsync(Po, force: true);  // máy quét: thao tác cố ý nên được xử lý
+        await workflow.HandleCodeAsync(Po);               // quét lại cùng PO = cân lại
         Assert.Equal(2, poRepo.Calls);
         Assert.Equal(WorkflowState.WaitingForWeight, workflow.State);
-    }
-
-    [Fact]
-    public async Task Force_does_not_interrupt_a_weighing_in_progress()
-    {
-        var poRepo = new FakePoRepository();
-        poRepo.Data[Po] = new PoInfo(Po, "P", "H", "L", 2, 30, 3);
-        var workflow = new WeighingWorkflow(poRepo, new FakeHistory(), new FakeScale(), new FakeErrorLog(), new FakePending(),
-            () => new WeighingSettings());
-
-        await workflow.HandleCodeAsync(Po);
-        Assert.Equal(WorkflowState.WaitingForWeight, workflow.State);
-
-        await workflow.HandleCodeAsync("999999999999", force: true);
-        Assert.Equal(1, poRepo.Calls);
-        Assert.Equal(Po, workflow.CurrentPo!.Aufnr);
     }
 }

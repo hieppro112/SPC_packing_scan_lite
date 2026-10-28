@@ -7,12 +7,34 @@ namespace ScaleScanLite.Services.Data;
 
 internal sealed class SqlHistoryRepository : IHistoryRepository
 {
-    private const string InsertSql = @"
-INSERT INTO [KVH].[dbo].[PackingScaleHistory] (AUFNR, PHCD, PHTX, PSTX, GAMNG, kg, UPDDT)
-SELECT @AUFNR, @PHCD, @PHTX, @PSTX, @GAMNG, @kg, @UPDDT
-WHERE NOT EXISTS (
-    SELECT 1 FROM [KVH].[dbo].[PackingScaleHistory] WITH (UPDLOCK, HOLDLOCK) WHERE AUFNR = @AUFNR
-);";
+    /// <summary>
+    /// Chưa có PO thì thêm mới; đã có thì cập nhật dòng mới nhất của PO (số kg mới, thời gian mới) và trả về số kg cũ.
+    /// UPDLOCK + HOLDLOCK trong một giao dịch để hai trạm cân cùng một PO không tạo ra hai dòng.
+    /// </summary>
+    private const string SaveSql = @"
+SET XACT_ABORT ON;
+BEGIN TRAN;
+
+DECLARE @id BIGINT, @prev FLOAT;
+SELECT TOP (1) @id = Id, @prev = kg
+FROM [KVH].[dbo].[PackingScaleHistory] WITH (UPDLOCK, HOLDLOCK)
+WHERE AUFNR = @AUFNR
+ORDER BY Id DESC;
+
+IF @id IS NULL
+BEGIN
+    INSERT INTO [KVH].[dbo].[PackingScaleHistory] (AUFNR, PHCD, PHTX, PSTX, GAMNG, kg, UPDDT)
+    VALUES (@AUFNR, @PHCD, @PHTX, @PSTX, @GAMNG, @kg, @UPDDT);
+END
+ELSE
+BEGIN
+    UPDATE [KVH].[dbo].[PackingScaleHistory]
+    SET PHCD = @PHCD, PHTX = @PHTX, PSTX = @PSTX, GAMNG = @GAMNG, kg = @kg, UPDDT = @UPDDT
+    WHERE Id = @id;
+END
+
+COMMIT;
+SELECT CASE WHEN @id IS NULL THEN 0 ELSE 1 END AS Existed, @prev AS PrevKg;";
 
     private const string Columns = "Id, AUFNR, PHCD, PHTX, PSTX, GAMNG, kg, UPDDT";
 
@@ -20,14 +42,14 @@ WHERE NOT EXISTS (
 
     public SqlHistoryRepository(SqlConnectionFactory factory) => _factory = factory;
 
-    public async Task<SaveResult> InsertAsync(WeighingRecord record, CancellationToken ct)
+    public async Task<SaveOutcome> SaveAsync(WeighingRecord record, CancellationToken ct)
     {
         try
         {
             await using var connection = _factory.CreateHistoryConnection();
             await connection.OpenAsync(ct).ConfigureAwait(false);
 
-            await using var command = new SqlCommand(InsertSql, connection) { CommandTimeout = _factory.CommandTimeoutSeconds };
+            await using var command = new SqlCommand(SaveSql, connection) { CommandTimeout = _factory.CommandTimeoutSeconds };
             command.Parameters.Add(new SqlParameter("@AUFNR", SqlDbType.NVarChar, 50) { Value = record.Aufnr });
             command.Parameters.Add(new SqlParameter("@PHCD", SqlDbType.NVarChar, 100) { Value = record.Phcd });
             command.Parameters.Add(new SqlParameter("@PHTX", SqlDbType.NVarChar, 200) { Value = record.Phtx });
@@ -36,8 +58,16 @@ WHERE NOT EXISTS (
             command.Parameters.Add(new SqlParameter("@kg", SqlDbType.Float) { Value = record.Kg });
             command.Parameters.Add(new SqlParameter("@UPDDT", SqlDbType.DateTime) { Value = record.WeighedAt });
 
-            int rows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
-            return rows > 0 ? SaveResult.Saved : SaveResult.Duplicate;
+            await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            if (!await reader.ReadAsync(ct).ConfigureAwait(false))
+                throw new InvalidOperationException("Câu lệnh lưu không trả về kết quả.");
+
+            bool existed = Convert.ToInt32(reader["Existed"]) == 1;
+            if (!existed)
+                return new SaveOutcome(SaveResult.Saved);
+
+            double? previous = reader["PrevKg"] is DBNull ? null : Convert.ToDouble(reader["PrevKg"]);
+            return new SaveOutcome(SaveResult.Updated, previous);
         }
         catch (Exception ex) when (SqlConnectionFactory.IsConnectivityError(ex))
         {

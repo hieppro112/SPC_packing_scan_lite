@@ -194,6 +194,7 @@ internal sealed partial class MainViewModel : ObservableObject, IDisposable
             _ = LoadPageAsync(1);
             FocusEntryRequested?.Invoke();
         });
+        _workflow.PoCleared += () => Post(ClearPoInfo);
         _workflow.Cleared += () => Post(ClearPo);
 
         _scale.ReadingReceived += kg =>
@@ -239,7 +240,7 @@ internal sealed partial class MainViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
-    /// Mọi nguồn mã đều đi qua đây. force = true: quét/nhập tay là thao tác cố ý nên cho phép quét lại đúng mã vừa xử lý.
+    /// Mọi nguồn mã đều đi qua đây (PO quét sau cùng luôn là PO sẽ được cân).
     /// Cùng một mã đến từ hai đường trong một thời gian ngắn (máy quét gõ vào ô nhập + Raw Input) chỉ tính một lần.
     /// </summary>
     private void SubmitCode(string code)
@@ -255,7 +256,7 @@ internal sealed partial class MainViewModel : ObservableObject, IDisposable
         }
 
         Post(() => LastCode = code.Length > 60 ? code[..60] + "…" : code);
-        _ = RunSafe(() => _workflow.HandleCodeAsync(code, force: true), "xử lý mã quét");
+        _ = RunSafe(() => _workflow.HandleCodeAsync(code), "xử lý mã quét");
     }
 
     // =====================================================================
@@ -286,6 +287,13 @@ internal sealed partial class MainViewModel : ObservableObject, IDisposable
         ExpectedKgText = expected is double e ? $"{e:0.###} kg" : "Chưa có dữ liệu";
     }
 
+    /// <summary>Cân xong / PO bị thay / hết giờ chờ: xóa thông tin PO, chờ quét PO mới (giữ số cân và kết quả gần nhất).</summary>
+    private void ClearPoInfo()
+    {
+        PoCode = Phcd = Phtx = Pstx = QuantityText = ExpectedKgText = "—";
+        IsWeightStable = false;
+    }
+
     private void ClearPo()
     {
         LastCode = "—";
@@ -297,12 +305,17 @@ internal sealed partial class MainViewModel : ObservableObject, IDisposable
 
     private void ShowLastResult(WeighingOutcome outcome)
     {
+        string update = outcome.Result == SaveResult.Updated && outcome.PreviousKg is double prev
+            ? $" (đã cập nhật cân mới, trước đó {prev:0.###} kg)"
+            : "";
+
         var (text, level) = outcome.Result switch
         {
-            SaveResult.Duplicate => ($"PO {outcome.Po.Aufnr} đã được cân trước đó, không lưu lại.", NoticeLevel.Warning),
             SaveResult.Queued => ($"PO {outcome.Po.Aufnr}: {outcome.Kg:0.###} kg - mất kết nối SQL, đã lưu tạm trên máy.", NoticeLevel.Warning),
             _ when outcome.Check is { WithinTolerance: false } c =>
-                ($"PO {outcome.Po.Aufnr}: cân {outcome.Kg:0.###} kg, chuẩn {c.Expected:0.###} kg (lệch {c.Difference:+0.###;-0.###}).", NoticeLevel.Warning),
+                ($"PO {outcome.Po.Aufnr}: cân {outcome.Kg:0.###} kg, chuẩn {c.Expected:0.###} kg (lệch {c.Difference:+0.###;-0.###}){update}.", NoticeLevel.Warning),
+            SaveResult.Updated =>
+                ($"PO {outcome.Po.Aufnr}: cập nhật cân mới {outcome.Kg:0.###} kg{(outcome.PreviousKg is double p ? $" (trước đó {p:0.###} kg)" : "")}.", NoticeLevel.Info),
             _ when outcome.Check is { } c =>
                 ($"PO {outcome.Po.Aufnr}: {outcome.Kg:0.###} kg - đúng khối lượng chuẩn {c.Expected:0.###} kg.", NoticeLevel.Success),
             _ => ($"PO {outcome.Po.Aufnr}: {outcome.Kg:0.###} kg - đã lưu (không có khối lượng chuẩn để so sánh).", NoticeLevel.Success)
@@ -312,7 +325,6 @@ internal sealed partial class MainViewModel : ObservableObject, IDisposable
         LastResultLevel = level;
         HasLastResult = true;
     }
-
     private static string Dash(string value) => string.IsNullOrWhiteSpace(value) ? "—" : value;
 
     private void ShowNotice(WorkflowNotice notice)

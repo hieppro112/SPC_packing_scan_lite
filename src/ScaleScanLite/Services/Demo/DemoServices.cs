@@ -79,16 +79,21 @@ internal sealed class InMemoryHistoryRepository : IHistoryRepository
         }
     }
 
-    public async Task<SaveResult> InsertAsync(WeighingRecord record, CancellationToken ct)
+    public async Task<SaveOutcome> SaveAsync(WeighingRecord record, CancellationToken ct)
     {
         await Task.Delay(120, ct).ConfigureAwait(false);
         lock (_lock)
         {
-            if (_rows.Any(r => r.Aufnr == record.Aufnr))
-                return SaveResult.Duplicate;
+            int index = _rows.FindLastIndex(r => r.Aufnr == record.Aufnr);
+            if (index >= 0)
+            {
+                var existing = _rows[index];
+                _rows[index] = record with { Id = existing.Id };
+                return new SaveOutcome(SaveResult.Updated, existing.Kg);
+            }
 
             _rows.Add(record with { Id = _nextId++ });
-            return SaveResult.Saved;
+            return new SaveOutcome(SaveResult.Saved);
         }
     }
 

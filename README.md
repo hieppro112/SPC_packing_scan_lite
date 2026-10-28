@@ -1,4 +1,4 @@
-﻿# Scale Scan Lite
+# Scale Scan Lite
 
 Bản **không camera** của Scale Scan Pro: mã PO đến từ **máy quét barcode USB** (hoặc gõ tay), sau đó quy trình giữ nguyên:
 tra PO từ SQL Server → đọc số kg từ cân điện tử qua cổng COM → so khối lượng chuẩn → lưu lịch sử → cảnh báo nếu lệch.
@@ -22,14 +22,16 @@ Tự kiểm tra không người trông (mã thoát 0 = đạt): `ScaleScanLite.e
    hoặc khi Scale Scan Lite thu nhỏ; app kia vẫn nhận mã như bình thường, Scale Scan Lite nhận thêm một bản sao. Chỉ nghe đúng máy quét đã chọn
    (nhận theo VID/PID), bàn phím thường bị bỏ qua hoàn toàn. Chỉ dùng được với máy quét ở chế độ bàn phím (HID).
 
-Mã quét/nhập tay cho phép quét lại đúng mã vừa xử lý. Cùng một mã đến từ hai đường (ô nhập đang được chọn + nghe nền) trong 1,5 giây chỉ tính một lần.
+Quét lại đúng mã vừa cân xong = cân lại PO đó. Cùng một mã đến từ hai đường (ô nhập đang được chọn + nghe nền) trong 1,5 giây chỉ tính một lần.
 
-## Luồng nghiệp vụ (giữ nguyên bản Pro)
+## Luồng nghiệp vụ
 
 1. Mã hợp lệ: chuỗi có dấu phẩy và hơn 2 phần → PO là phần tử thứ 2; hoặc chuỗi từ 11 ký tự → cả chuỗi là PO.
 2. Tra PO trong SQL → bắt đầu hỏi cân (lệnh `SP` mỗi 500 ms); 60 giây không có số ổn định thì bỏ phiên.
 3. Số cân ổn định (mặc định 5 lần đọc liên tiếp, lệch ≤ 0.005, ≥ 0.01) → lưu **một lần**; nút *Xác nhận cân* lưu ngay số hiện tại.
-4. `INSERT ... WHERE NOT EXISTS`: cùng PO không bao giờ lưu hai lần.
+4. **PO quét sau cùng được ưu tiên**: quét nhầm PO1 rồi quét PO2 trước khi bỏ lên cân thì số cân lưu cho PO2 (PO1 bị bỏ, kết quả tra cứu muộn của PO1 bị hủy). Mã sai định dạng không làm mất PO đang chờ cân.
+   Cân xong thì **xóa PO hiện tại**, chờ quét PO mới (số cân đọc thêm sau đó không lưu cho PO nào).
+   PO đã có trong lịch sử mà cân lại: **cập nhật** số kg và thời gian của dòng đó (không tạo dòng mới) và hiện thông báo *cập nhật cân mới* kèm số kg cũ.
 5. Khối lượng chuẩn = `round(NW/Qty, 3) × số lượng`; lệch quá `max(dung sai kg, dung sai %)` thì cảnh báo và ghi file JSON log.
 6. Mất kết nối SQL: lưu tạm trên máy (`pending.jsonl`) và tự đồng bộ mỗi 30 giây.
 7. Thu nhỏ xuống góc màn hình: cửa sổ nhỏ luôn nổi hiện số kg, mã PO, trạng thái và thông báo; hộp thông báo thường tự đóng sau 3 giây
