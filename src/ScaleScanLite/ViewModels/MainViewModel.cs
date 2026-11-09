@@ -184,6 +184,7 @@ internal sealed partial class MainViewModel : ObservableObject, IDisposable
             _ => "Sẵn sàng - hãy quét mã"
         });
         _workflow.PoLoaded += po => Post(() => ApplyPo(po));
+        _workflow.GroupFormed += (members, expectedTotal) => Post(() => ApplyGroup(members, expectedTotal));
         _workflow.Notice += notice => Post(() => ShowNotice(notice));
         _workflow.WeightChanged += (_, stable) => Post(() => IsWeightStable = stable);
         _workflow.Completed += outcome => Post(() =>
@@ -287,6 +288,14 @@ internal sealed partial class MainViewModel : ObservableObject, IDisposable
         ExpectedKgText = expected is double e ? $"{e:0.###} kg" : "Chưa có dữ liệu";
     }
 
+    /// <summary>Gói nhiều PO cùng custno: hiện đủ các PO, tổng số pcs và tổng khối lượng chuẩn của cả gói.</summary>
+    private void ApplyGroup(IReadOnlyList<PoInfo> members, double? expectedTotal)
+    {
+        PoCode = string.Join(" + ", members.Select(m => m.Aufnr));
+        QuantityText = string.Join(" + ", members.Select(m => m.Quantity.ToString("0.###"))) + " pcs";
+        ExpectedKgText = expectedTotal is double e ? $"{e:0.###} kg (cả gói)" : "Chưa có dữ liệu";
+    }
+
     /// <summary>Cân xong / PO bị thay / hết giờ chờ: xóa thông tin PO, chờ quét PO mới (giữ số cân và kết quả gần nhất).</summary>
     private void ClearPoInfo()
     {
@@ -308,6 +317,23 @@ internal sealed partial class MainViewModel : ObservableObject, IDisposable
         string update = outcome.Result == SaveResult.Updated && outcome.PreviousKg is double prev
             ? $" (đã cập nhật cân mới, trước đó {prev:0.###} kg)"
             : "";
+
+        if (outcome.Group is { Count: > 1 } group)
+        {
+            string parts = string.Join(", ", group.Select(g => $"{g.Aufnr} = {g.Kg:0.###} kg"));
+            var (gText, gLevel) = outcome.Result switch
+            {
+                SaveResult.Queued => ($"Gói {group.Count} PO {outcome.Kg:0.###} kg ({parts}) - mất kết nối SQL, đã lưu tạm trên máy.", NoticeLevel.Warning),
+                _ when outcome.Check is { WithinTolerance: false } c =>
+                    ($"Gói {group.Count} PO: cân {outcome.Kg:0.###} kg, chuẩn {c.Expected:0.###} kg (lệch {c.Difference:+0.###;-0.###}). Đã chia: {parts}.", NoticeLevel.Warning),
+                SaveResult.Updated => ($"Gói {group.Count} PO: cập nhật cân mới {outcome.Kg:0.###} kg ({parts}).", NoticeLevel.Info),
+                _ => ($"Gói {group.Count} PO: {outcome.Kg:0.###} kg ({parts}).", NoticeLevel.Success)
+            };
+            LastResultText = gText;
+            LastResultLevel = gLevel;
+            HasLastResult = true;
+            return;
+        }
 
         var (text, level) = outcome.Result switch
         {

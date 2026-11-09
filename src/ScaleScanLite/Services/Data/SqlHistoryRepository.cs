@@ -55,7 +55,7 @@ SELECT CASE WHEN @id IS NULL THEN 0 ELSE 1 END AS Existed, @prev AS PrevKg;";
             command.Parameters.Add(new SqlParameter("@PHTX", SqlDbType.NVarChar, 200) { Value = record.Phtx });
             command.Parameters.Add(new SqlParameter("@PSTX", SqlDbType.NVarChar, 200) { Value = record.Pstx });
             command.Parameters.Add(new SqlParameter("@GAMNG", SqlDbType.Float) { Value = record.Quantity });
-            command.Parameters.Add(new SqlParameter("@kg", SqlDbType.Float) { Value = record.Kg });
+            command.Parameters.Add(new SqlParameter("@kg", SqlDbType.Float) { Value = record.Kg -5 }); //tru 5g moi don hang 
             command.Parameters.Add(new SqlParameter("@UPDDT", SqlDbType.DateTime) { Value = record.WeighedAt });
 
             await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);

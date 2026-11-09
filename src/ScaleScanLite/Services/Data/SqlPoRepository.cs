@@ -16,7 +16,13 @@ SELECT TOP (1)
     REQ_HED.PSTX,
     REQ_HED.GAMNG,
     Packing.NW,
-    Packing.Qty
+    Packing.Qty,
+    CASE
+        WHEN dtl.RRONYU1 IN ('KJS', 'KJK', 'KJS_TK', 'ERC', 'WRC', 'CRC', 'FJS')
+             AND SUBSTRING(dtl.ZGLOBAL_CODE, 7, 1) = '-'
+        THEN SUBSTRING(dtl.ZGLOBAL_CODE, 8, LEN(dtl.ZGLOBAL_CODE))
+        ELSE dtl.ZGLOBAL_CODE
+    END AS CUSTNO
 FROM [dbo].[MANUFA_F_PD_DT_REQ_HED] AS REQ_HED
 LEFT JOIN [dbo].[MANUFA_F_PD_DT_ORDER_DTL] AS dtl
     ON dtl.VBELN = REQ_HED.KDAUF
@@ -54,7 +60,8 @@ WHERE REQ_HED.AUFNR = @id;";
                 Pstx: Text(reader, "PSTX"),
                 Quantity: Number(reader, "GAMNG"),
                 NetWeight: Number(reader, "NW"),
-                PackQty: (int)Math.Round(Number(reader, "Qty")));
+                PackQty: (int)Math.Round(Number(reader, "Qty")),
+                CustNo: Text(reader, "CUSTNO"));
         }
         catch (Exception ex) when (SqlConnectionFactory.IsConnectivityError(ex))
         {

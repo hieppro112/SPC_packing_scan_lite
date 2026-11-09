@@ -23,7 +23,7 @@ internal static class DemoData
     };
 
     public static PoInfo CreatePo(string aufnr)
-        => new(aufnr, "P0003983", "PJXB4-60-0", "PJXB", Quantity, NetWeight, PackQty);
+        => new(aufnr, "P0003983", "PJXB4-60-0", "PJXB", Quantity, NetWeight, PackQty, "DEMO-CUST");
 }
 
 /// <summary>Chế độ chạy thử: định kỳ "quét" lần lượt các mã mẫu như có người dùng máy quét.</summary>
