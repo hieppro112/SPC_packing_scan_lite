@@ -8,7 +8,8 @@ public sealed record PoInfo(
     string Pstx,
     double Quantity,
     double NetWeight,
-    int PackQty);
+    int PackQty,
+    string CustNo = "");
 
 public sealed record WeighingRecord(
     long Id,
@@ -42,9 +43,17 @@ public sealed record WeightCheckResult(
     double Allowed,
     bool WithinTolerance);
 
+/// <summary>Phần số cân của một PO trong gói nhiều PO (chia theo số pcs).</summary>
+public sealed record PoShare(string Aufnr, double Pcs, double Kg, SaveResult Result, double? PreviousKg = null);
+
+/// <summary>
+/// Kết quả một lượt cân. Gói nhiều PO cùng custno: <see cref="Po"/> là PO quét sau cùng, <see cref="Kg"/> là tổng số cân cả gói,
+/// <see cref="Check"/> so tổng cân với tổng chuẩn, <see cref="Group"/> liệt kê phần của từng PO.
+/// </summary>
 public sealed record WeighingOutcome(
     PoInfo Po,
     double Kg,
     SaveResult Result,
     WeightCheckResult? Check,
-    double? PreviousKg = null);
+    double? PreviousKg = null,
+    IReadOnlyList<PoShare>? Group = null);

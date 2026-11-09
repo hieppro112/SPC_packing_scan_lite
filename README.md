@@ -32,6 +32,10 @@ Quét lại đúng mã vừa cân xong = cân lại PO đó. Cùng một mã đ�
 4. **PO quét sau cùng được ưu tiên**: quét nhầm PO1 rồi quét PO2 trước khi bỏ lên cân thì số cân lưu cho PO2 (PO1 bị bỏ, kết quả tra cứu muộn của PO1 bị hủy). Mã sai định dạng không làm mất PO đang chờ cân.
    Cân xong thì **xóa PO hiện tại**, chờ quét PO mới (số cân đọc thêm sau đó không lưu cho PO nào).
    PO đã có trong lịch sử mà cân lại: **cập nhật** số kg và thời gian của dòng đó (không tạo dòng mới) và hiện thông báo *cập nhật cân mới* kèm số kg cũ.
+   **Gói nhiều PO (nhiều sheet cùng một gói hàng):** quét liên tiếp các PO, mỗi mã cách mã trước không quá `GroupWindowSeconds` (mặc định 5 giây, 0 = tắt)
+   và **cùng custno** (tính từ `ZGLOBAL_CODE` như truy vấn PO, không phân biệt hoa thường) thì ghép thành một gói: cân **một lần**, số cân chia cho từng PO theo
+   `GAMNG` (pcs) — ví dụ PO 521 (3 pcs) + PO 522 (2 pcs) cân 25 kg → 521 = 15 kg, 522 = 10 kg. Phần dư làm tròn dồn vào PO cuối. Dung sai so **tổng cân** với
+   **tổng khối lượng chuẩn** của cả gói (một cảnh báo, một file log JSON). Khác custno, thiếu custno hoặc quá thời gian thì giữ quy tắc PO quét sau cùng.
 5. Khối lượng chuẩn = `round(NW/Qty, 3) × số lượng`; lệch quá `max(dung sai kg, dung sai %)` thì cảnh báo và ghi file JSON log.
 6. Mất kết nối SQL: lưu tạm trên máy (`pending.jsonl`) và tự đồng bộ mỗi 30 giây.
 7. Thu nhỏ xuống góc màn hình: cửa sổ nhỏ luôn nổi hiện số kg, mã PO, trạng thái và thông báo; hộp thông báo thường tự đóng sau 3 giây

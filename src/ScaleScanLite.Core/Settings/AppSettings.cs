@@ -43,6 +43,12 @@ public sealed class WeighingSettings
     public double MinWeightKg { get; set; } = 0.01;
     public int WaitTimeoutSeconds { get; set; } = 60;
     public int MinPlainCodeLength { get; set; } = 11;
+
+    /// <summary>
+    /// Hai PO quét liên tiếp cách nhau không quá số giây này và cùng custno được coi là một gói (2 sheet): cân một lần,
+    /// chia số cân theo số pcs. 0 = tắt, luôn lấy PO quét sau cùng.
+    /// </summary>
+    public int GroupWindowSeconds { get; set; } = 5;
 }
 
 /// <summary>Máy quét barcode USB (chế độ bàn phím). Scale Pro chỉ "nghe" thêm, không chặn phím gửi tới app khác.</summary>

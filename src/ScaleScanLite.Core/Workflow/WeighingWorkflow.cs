@@ -49,6 +49,8 @@ public sealed class WeighingWorkflow
 
     private WorkflowState _state = WorkflowState.Idle;
     private PoInfo? _currentPo;
+    private readonly List<PoInfo> _group = new();   // các PO cùng gói đang chờ cân; PO cuối = _currentPo
+    private DateTime _lastScanAt = DateTime.MinValue;
     private string? _lookingUp;
     private string? _queuedCode;
     private double _lastReading;
@@ -81,6 +83,9 @@ public sealed class WeighingWorkflow
     /// <summary>PO gần nhất bị xóa (đã cân xong, bị thay bằng PO khác, hết thời gian chờ...): giao diện xóa thông tin PO.</summary>
     public event Action? PoCleared;
 
+    /// <summary>Hai PO trở lên cùng custno được ghép thành một gói: số PO trong gói và tổng khối lượng chuẩn (nếu đủ dữ liệu).</summary>
+    public event Action<IReadOnlyList<PoInfo>, double?>? GroupFormed;
+
     public event Action<WorkflowNotice>? Notice;
     public event Action<double, bool>? WeightChanged;
     public event Action<WeighingOutcome>? Completed;
@@ -112,6 +117,7 @@ public sealed class WeighingWorkflow
 
         int startGen;
         bool hadPo;
+        List<PoInfo>? prior = null;   // gói đang chờ cân, giữ lại đến khi biết PO mới có cùng custno không
         lock (_gate)
         {
             if (_state == WorkflowState.Saving)
@@ -121,20 +127,37 @@ public sealed class WeighingWorkflow
                 return;
             }
 
-            if (_state == WorkflowState.WaitingForWeight && string.Equals(_currentPo?.Aufnr, aufnr, StringComparison.Ordinal))
+            if (_state == WorkflowState.WaitingForWeight && _group.Any(p => string.Equals(p.Aufnr, aufnr, StringComparison.Ordinal)))
                 return; // quét lại đúng PO đang chờ cân: giữ nguyên tiến độ
 
             if (_state == WorkflowState.LookingUpPo && string.Equals(_lookingUp, aufnr, StringComparison.Ordinal))
                 return; // đang tra đúng mã này
 
-            // PO quét sau cùng thắng: bỏ PO đang chờ (nếu có) và bắt đầu tra PO mới.
-            hadPo = _currentPo != null;
-            if (hadPo)
-                _log?.Invoke($"Quét PO {aufnr}, bỏ PO {_currentPo!.Aufnr} chưa cân");
+            var now = _clock();
+            bool withinWindow = s.GroupWindowSeconds > 0
+                && _state == WorkflowState.WaitingForWeight
+                && _currentPo != null
+                && (now - _lastScanAt).TotalSeconds <= s.GroupWindowSeconds;
+            _lastScanAt = now;
+
+            if (withinWindow)
+            {
+                // Quét liên tiếp trong thời gian ghép: chưa bỏ PO cũ, đợi tra PO mới rồi so custno.
+                prior = _group.ToList();
+                hadPo = false;
+            }
+            else
+            {
+                // PO quét sau cùng thắng: bỏ PO đang chờ (nếu có) và bắt đầu tra PO mới.
+                hadPo = _currentPo != null;
+                if (hadPo)
+                    _log?.Invoke($"Quét PO {aufnr}, bỏ PO {_currentPo!.Aufnr} chưa cân");
+                _currentPo = null;
+                _group.Clear();
+            }
 
             _generation++;
             startGen = _generation;
-            _currentPo = null;
             _lookingUp = aufnr;
             _lastReading = 0;
             _queuedCode = null;
@@ -156,7 +179,7 @@ public sealed class WeighingWorkflow
             if (IsCurrent(startGen))
             {
                 Notify(NoticeLevel.Error, "Không truy vấn được dữ liệu PO: " + ex.Message);
-                SetIdle(startGen);
+                SetIdle(startGen, prior != null);
             }
 
             return;
@@ -167,18 +190,24 @@ public sealed class WeighingWorkflow
             if (IsCurrent(startGen))
             {
                 Notify(NoticeLevel.Warning, $"Không tìm thấy PO {aufnr}");
-                SetIdle(startGen);
+                SetIdle(startGen, prior != null);
             }
 
             return;
         }
 
         int gen;
+        bool joined = false;
+        List<PoInfo> members;
         lock (_gate)
         {
             if (_generation != startGen)
                 return; // đã có PO khác được quét (hoặc Reset) trong lúc tra cứu: bỏ kết quả này
 
+            joined = prior != null && SameCustomer(prior, po);
+            members = joined ? new List<PoInfo>(prior!) { po } : new List<PoInfo> { po };
+            _group.Clear();
+            _group.AddRange(members);
             _currentPo = po;
             _lookingUp = null;
             _stability = new StabilityDetector(s.StableCount, s.StableSpreadKg, s.MinWeightKg);
@@ -187,7 +216,22 @@ public sealed class WeighingWorkflow
             gen = ++_generation;
         }
 
+        if (prior != null && !joined)
+        {
+            _log?.Invoke($"PO {po.Aufnr} khác custno với PO đang chờ: bỏ PO cũ");
+            Raise(() => PoCleared?.Invoke());
+        }
+
         Raise(() => PoLoaded?.Invoke(po));
+        if (joined)
+        {
+            double? expectedTotal = ExpectedTotal(members);
+            _log?.Invoke($"Ghép gói {string.Join("+", members.Select(m => m.Aufnr))} (custno {po.CustNo})");
+            Notify(NoticeLevel.Info,
+                $"Ghép {members.Count} PO cùng custno {po.CustNo}: {string.Join(" + ", members.Select(m => $"{m.Aufnr} ({m.Quantity:0.###} pcs)"))}. Cân một lần, số cân sẽ chia theo pcs.");
+            Raise(() => GroupFormed?.Invoke(members, expectedTotal));
+        }
+
         Raise(() => StateChanged?.Invoke(WorkflowState.WaitingForWeight));
         _scale.StartPolling();
         _ = WaitTimeoutAsync(gen, s.WaitTimeoutSeconds);
@@ -258,6 +302,7 @@ public sealed class WeighingWorkflow
             _generation++;
             _state = WorkflowState.Idle;
             _currentPo = null;
+            _group.Clear();
             _lookingUp = null;
             _queuedCode = null;
             _lastReading = 0;
@@ -271,9 +316,17 @@ public sealed class WeighingWorkflow
     private async Task SaveAsync(double kg, int gen)
     {
         PoInfo po;
+        List<PoInfo> group;
         lock (_gate)
         {
             po = _currentPo!;
+            group = _group.ToList();
+        }
+
+        if (group.Count > 1)
+        {
+            await SaveGroupAsync(group, kg, gen).ConfigureAwait(false);
+            return;
         }
 
         _scale.StopPolling();
@@ -339,6 +392,95 @@ public sealed class WeighingWorkflow
         await ProcessQueuedCodeAsync().ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Lưu một gói nhiều PO cùng custno: một lần cân, số cân chia cho từng PO theo pcs (PO nhiều pcs nhận nhiều kg hơn).
+    /// Dung sai so tổng cân với tổng khối lượng chuẩn của cả gói.
+    /// </summary>
+    private async Task SaveGroupAsync(List<PoInfo> group, double totalKg, int gen)
+    {
+        _scale.StopPolling();
+        var s = _settings();
+        var now = _clock();
+        var shares = WeightSplitter.Split(totalKg, group.Select(p => p.Quantity).ToList());
+
+        WeightCheckResult? check = null;
+        if (ExpectedTotal(group) is double expectedTotal)
+            check = WeightCalculator.Check(totalKg, expectedTotal, s.ToleranceKg, s.TolerancePercent);
+
+        var saved = new List<PoShare>();
+        var failed = new List<string>();
+        string? failure = null;
+        bool queued = false;
+
+        for (int i = 0; i < group.Count; i++)
+        {
+            var po = group[i];
+            var record = new WeighingRecord(0, po.Aufnr, po.Phcd, po.Phtx, po.Pstx, po.Quantity, shares[i], now);
+            try
+            {
+                var outcome = await _history.SaveAsync(record, CancellationToken.None).ConfigureAwait(false);
+                saved.Add(new PoShare(po.Aufnr, po.Quantity, shares[i], outcome.Result, outcome.PreviousKg));
+            }
+            catch (DataUnavailableException ex)
+            {
+                _log?.Invoke("Mất kết nối SQL khi lưu: " + ex.Message);
+                _pending.Enqueue(record);
+                queued = true;
+                saved.Add(new PoShare(po.Aufnr, po.Quantity, shares[i], SaveResult.Queued));
+            }
+            catch (Exception ex)
+            {
+                _log?.Invoke("Lưu lịch sử lỗi: " + ex);
+                failed.Add(po.Aufnr);
+                failure = ex.Message;
+            }
+        }
+
+        if (failed.Count > 0)
+            Notify(NoticeLevel.Error, $"Lưu thất bại PO {string.Join(", ", failed)}: {failure} Hãy quét lại PO.");
+
+        if (saved.Count > 0)
+        {
+            string names = string.Join("+", saved.Select(x => x.Aufnr));
+            string breakdown = string.Join(", ", saved.Select(x => $"{x.Aufnr} = {x.Kg:0.###} kg ({x.Pcs:0.###} pcs)"));
+            var updatedParts = saved.Where(x => x.Result == SaveResult.Updated)
+                .Select(x => x.PreviousKg is double p ? $"{x.Aufnr} (trước đó {p:0.###} kg)" : x.Aufnr).ToList();
+            string updatedNote = updatedParts.Count > 0 ? $" Đã cập nhật cân mới: {string.Join(", ", updatedParts)}." : "";
+
+            if (queued)
+                Notify(NoticeLevel.Warning, "Mất kết nối SQL - đã lưu tạm trên máy, sẽ tự đồng bộ khi có mạng lại.");
+
+            if (check is { WithinTolerance: false })
+            {
+                var first = group[0];
+                var combinedPo = first with
+                {
+                    Aufnr = names,
+                    Quantity = group.Sum(p => p.Quantity)
+                };
+                var combinedRecord = new WeighingRecord(0, names, first.Phcd, first.Phtx, first.Pstx, combinedPo.Quantity, totalKg, now);
+                try { _errorLog.WriteMismatch(combinedRecord, combinedPo, check); }
+                catch (Exception ex) { _log?.Invoke("Ghi log lệch cân lỗi: " + ex.Message); }
+
+                Notify(NoticeLevel.Warning,
+                    $"Lệch khối lượng gói {names}: cân {totalKg:0.###} kg, chuẩn {check.Expected:0.###} kg (cho phép ±{check.Allowed:0.###} kg). Đã chia: {breakdown}.{updatedNote}");
+            }
+            else
+            {
+                Notify(updatedParts.Count > 0 ? NoticeLevel.Info : NoticeLevel.Success,
+                    $"Đã cân {totalKg:0.###} kg cho {saved.Count} PO: {breakdown}.{updatedNote}");
+            }
+
+            var overall = saved.Any(x => x.Result == SaveResult.Queued) ? SaveResult.Queued
+                : saved.Any(x => x.Result == SaveResult.Updated) ? SaveResult.Updated
+                : SaveResult.Saved;
+            Raise(() => Completed?.Invoke(new WeighingOutcome(group[^1], totalKg, overall, check, null, saved)));
+        }
+
+        FinishPo(gen);
+        await ProcessQueuedCodeAsync().ConfigureAwait(false);
+    }
+
     /// <summary>Kết thúc PO hiện tại: xóa PO, về trạng thái chờ quét (chỉ khi chưa có Reset/PO khác chen vào).</summary>
     private void FinishPo(int gen)
     {
@@ -348,6 +490,7 @@ public sealed class WeighingWorkflow
                 return;
 
             _currentPo = null;
+            _group.Clear();
             _lastReading = 0;
             _state = WorkflowState.Idle;
         }
@@ -381,6 +524,7 @@ public sealed class WeighingWorkflow
 
             _generation++;
             _currentPo = null;
+            _group.Clear();
             _state = WorkflowState.Idle;
         }
 
@@ -395,7 +539,8 @@ public sealed class WeighingWorkflow
         lock (_gate) return _generation == gen;
     }
 
-    private void SetIdle(int gen)
+    /// <summary>Tra PO thất bại: về chờ quét. <paramref name="dropGroup"/> = có gói cũ đang giữ lại thì bỏ nó và báo giao diện xóa PO.</summary>
+    private void SetIdle(int gen, bool dropGroup = false)
     {
         lock (_gate)
         {
@@ -403,9 +548,41 @@ public sealed class WeighingWorkflow
                 return;
             _lookingUp = null;
             _state = WorkflowState.Idle;
+            if (dropGroup)
+            {
+                _currentPo = null;
+                _group.Clear();
+            }
+        }
+
+        if (dropGroup)
+        {
+            _scale.StopPolling();
+            Raise(() => PoCleared?.Invoke());
         }
 
         Raise(() => StateChanged?.Invoke(WorkflowState.Idle));
+    }
+
+    /// <summary>Cùng custno (không rỗng, không phân biệt hoa thường) với mọi PO trong gói đang chờ.</summary>
+    private static bool SameCustomer(IReadOnlyList<PoInfo> group, PoInfo po)
+    {
+        var cust = po.CustNo?.Trim();
+        return !string.IsNullOrEmpty(cust)
+            && group.All(p => string.Equals(p.CustNo?.Trim(), cust, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static double? ExpectedTotal(IReadOnlyList<PoInfo> group)
+    {
+        double total = 0;
+        foreach (var p in group)
+        {
+            if (WeightCalculator.ExpectedKg(p.NetWeight, p.PackQty, p.Quantity) is not double e)
+                return null;
+            total += e;
+        }
+
+        return Math.Round(total, 3);
     }
 
     private void Notify(NoticeLevel level, string message)
