@@ -177,6 +177,78 @@
                                     </Border>
                                 </Grid>
 
+                                <!-- PO đang chờ cân: mỗi PO một thẻ, chỉnh số lượng thực tế riêng cho từng PO -->
+                                <StackPanel Margin="0,14,0,0" Visibility="{Binding HasPoItems, Converter={StaticResource BoolToVis}}">
+                                    <TextBlock Text="PO ĐANG CHỜ CÂN · NHẬP SỐ LƯỢNG THỰC TẾ NẾU KHÁC SỐ BAN ĐẦU" Style="{StaticResource Caption}" Margin="0,0,0,6"/>
+                                    <ItemsControl ItemsSource="{Binding PoItems}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border CornerRadius="8" BorderThickness="1" Padding="12,10" Margin="0,0,0,8">
+                                                    <Border.Style>
+                                                        <Style TargetType="Border">
+                                                            <Setter Property="Background" Value="{StaticResource BgLight}"/>
+                                                            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsEdited}" Value="True">
+                                                                    <Setter Property="Background" Value="{StaticResource AmberSoft}"/>
+                                                                    <Setter Property="BorderBrush" Value="#FDE68A"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Border.Style>
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <StackPanel VerticalAlignment="Center">
+                                                            <TextBlock Text="{Binding Aufnr}" FontFamily="Consolas" FontSize="16" FontWeight="Bold"
+                                                                       Foreground="{StaticResource Accent}"/>
+                                                            <TextBlock Text="{Binding Description}" FontSize="11" Foreground="{StaticResource TxtMuted}"
+                                                                       TextWrapping="Wrap" Margin="0,2,0,0"/>
+                                                            <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                                                <TextBlock Text="Số lượng ban đầu: " FontSize="12" Foreground="{StaticResource TxtMuted}"/>
+                                                                <TextBlock Text="{Binding MasterText}" FontSize="12" FontWeight="Bold"/>
+                                                                <TextBlock Text=" pcs" FontSize="12" Foreground="{StaticResource TxtMuted}"/>
+                                                            </StackPanel>
+                                                            <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                                                                <TextBlock Text="Khối lượng chuẩn: " FontSize="12" Foreground="{StaticResource TxtMuted}"/>
+                                                                <TextBlock Text="{Binding ExpectedText}" FontSize="12" FontWeight="Bold"/>
+                                                            </StackPanel>
+                                                        </StackPanel>
+                                                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="12,0,0,0"
+                                                                    ToolTip="Số lượng thực tế (pcs). Số cân sẽ được lưu và chia theo số này.">
+                                                            <TextBlock Text="SỐ LƯỢNG THỰC TẾ" Style="{StaticResource Caption}" HorizontalAlignment="Center" Margin="0,0,0,4"/>
+                                                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                                                <TextBox Text="{Binding Input, UpdateSourceTrigger=PropertyChanged}" Width="104" TextAlignment="Center"
+                                                                         FontSize="22" FontWeight="Bold" FontFamily="Consolas" Padding="6,5"
+                                                                         BorderThickness="2" VerticalContentAlignment="Center"
+                                                                         KeyDown="Quantity_KeyDown" LostFocus="Quantity_LostFocus">
+                                                                    <TextBox.Style>
+                                                                        <Style TargetType="TextBox">
+                                                                            <Setter Property="Foreground" Value="{StaticResource Amber}"/>
+                                                                            <Setter Property="Background" Value="White"/>
+                                                                            <Setter Property="BorderBrush" Value="#FCD34D"/>
+                                                                            <Style.Triggers>
+                                                                                <DataTrigger Binding="{Binding IsInvalid}" Value="True">
+                                                                                    <Setter Property="Background" Value="{StaticResource RedSoft}"/>
+                                                                                    <Setter Property="BorderBrush" Value="{StaticResource Red}"/>
+                                                                                </DataTrigger>
+                                                                            </Style.Triggers>
+                                                                        </Style>
+                                                                    </TextBox.Style>
+                                                                </TextBox>
+                                                                <TextBlock Text="pcs" FontSize="14" FontWeight="SemiBold" Foreground="{StaticResource TxtMuted}"
+                                                                           VerticalAlignment="Center" Margin="6,0,0,0"/>
+                                                            </StackPanel>
+                                                        </StackPanel>
+                                                    </Grid>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
+
                                 <Border Margin="0,12,0,0" CornerRadius="8" Background="{StaticResource BgLight}"
                                         BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
                                         Visibility="{Binding HasLastResult, Converter={StaticResource BoolToVis}}">
@@ -278,9 +350,8 @@
                                         <TextBlock Grid.Row="2" Text="PSTX" Foreground="{StaticResource TxtMuted}" FontSize="12" Margin="0,3,16,3"/>
                                         <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding Pstx}" FontSize="12" FontWeight="SemiBold"
                                                    Foreground="{StaticResource GreenDark}" HorizontalAlignment="Right" Margin="0,3"/>
-                                        <TextBlock Grid.Row="3" Text="Số lượng" Foreground="{StaticResource TxtMuted}" FontSize="12" Margin="0,3,16,3"/>
-                                        <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding QuantityText}" FontSize="12" FontWeight="SemiBold"
-                                                   Foreground="{StaticResource Amber}" HorizontalAlignment="Right" Margin="0,3"/>
+
+
                                         <TextBlock Grid.Row="4" Text="Khối lượng chuẩn" Foreground="{StaticResource TxtMuted}" FontSize="12" Margin="0,3,16,3"/>
                                         <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding ExpectedKgText}" FontSize="12" FontWeight="SemiBold"
                                                    HorizontalAlignment="Right" Margin="0,3"/>

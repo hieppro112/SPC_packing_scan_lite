@@ -64,6 +64,24 @@ public partial class MainWindow : Window
         EntryBox.Focus();
     }
 
+    /// <summary>Enter ở ô số lượng: xong việc chỉnh, trả con trỏ về ô nhập mã để lượt quét sau vào đúng ô.</summary>
+    private void Quantity_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key is Key.Enter or Key.Return)
+        {
+            e.Handled = true;
+            if (sender is TextBox { DataContext: PoQuantityItem item })
+                item.RevertIfInvalid();
+            EntryBox.Focus();
+        }
+    }
+
+    private void Quantity_LostFocus(object sender, RoutedEventArgs e)
+    {
+        if (sender is TextBox { DataContext: PoQuantityItem item })
+            item.RevertIfInvalid();
+    }
+
     // ---------- Nút cửa sổ ----------
     private void Minimize_Click(object sender, RoutedEventArgs e) => EnterCompact();
 
