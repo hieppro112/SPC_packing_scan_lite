@@ -215,6 +215,96 @@ public class GroupWeighingTests
     }
 
     [Fact]
+    public async Task Edited_quantity_is_used_for_expected_weight_the_saved_row_and_the_notice()
+    {
+        await _workflow.HandleCodeAsync(A);              // master 3 pcs → chuẩn 15 kg
+        Assert.True(_workflow.TrySetQuantity(A, 4, out var expected));
+        Assert.Equal(20, expected);                      // 4 pcs × 5 kg
+
+        await Weigh(20);
+
+        var row = _history.Rows[A];
+        Assert.Equal(4, row.Quantity);
+        Assert.Equal(20, row.Kg);
+        Assert.Empty(_errors.Items);                     // đúng chuẩn theo số lượng đã chỉnh
+        var notice = Assert.Single(_notices, n => n.Level == NoticeLevel.Success);
+        Assert.Contains("Số lượng đã chỉnh", notice.Message);
+        Assert.Contains("3→4 pcs", notice.Message);
+    }
+
+    [Fact]
+    public async Task Without_editing_the_master_quantity_is_kept_and_no_note_is_shown()
+    {
+        await _workflow.HandleCodeAsync(A);
+        await Weigh(15);
+
+        Assert.Equal(3, _history.Rows[A].Quantity);
+        Assert.DoesNotContain(_notices, n => n.Message.Contains("đã chỉnh"));
+    }
+
+    [Fact]
+    public async Task Edited_quantities_drive_the_split_of_a_group()
+    {
+        await _workflow.HandleCodeAsync(A);              // 3 pcs
+        _now = _now.AddSeconds(1);
+        await _workflow.HandleCodeAsync(B);              // 2 pcs
+        Assert.True(_workflow.TrySetQuantity(B, 3, out var expected));
+        Assert.Equal(30, expected);                      // (3 + 3) × 5
+
+        await Weigh(30);
+
+        Assert.Equal(15, _history.Rows[A].Kg);
+        Assert.Equal(15, _history.Rows[B].Kg);
+        Assert.Equal(3, _history.Rows[B].Quantity);
+        Assert.Contains(_notices, n => n.Message.Contains("2→3 pcs"));
+    }
+
+    [Fact]
+    public async Task Quantity_edited_before_the_second_scan_is_kept_when_the_group_forms()
+    {
+        await _workflow.HandleCodeAsync(A);
+        Assert.True(_workflow.TrySetQuantity(A, 1, out _));
+        _now = _now.AddSeconds(1);
+        await _workflow.HandleCodeAsync(B);              // B 2 pcs: tổng 3 pcs
+
+        await Weigh(15);
+
+        Assert.Equal(5, _history.Rows[A].Kg);            // 15 × 1/3
+        Assert.Equal(10, _history.Rows[B].Kg);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-2)]
+    [InlineData(double.NaN)]
+    [InlineData(double.PositiveInfinity)]
+    public async Task Invalid_quantities_are_rejected_and_the_previous_value_stays(double bad)
+    {
+        await _workflow.HandleCodeAsync(A);
+        Assert.False(_workflow.TrySetQuantity(A, bad, out _));
+        Assert.Equal(3, _workflow.CurrentPo!.Quantity);
+    }
+
+    [Fact]
+    public async Task Quantity_cannot_be_changed_for_unknown_po_when_idle_or_while_saving()
+    {
+        Assert.False(_workflow.TrySetQuantity(A, 4, out _));          // chưa có PO
+
+        await _workflow.HandleCodeAsync(A);
+        Assert.False(_workflow.TrySetQuantity(B, 4, out _));          // PO không thuộc gói đang chờ
+
+        _history.Gate = new TaskCompletionSource<bool>();
+        var weighing = Weigh(15);
+        for (int i = 0; i < 300 && _workflow.State != WorkflowState.Saving; i++)
+            await Task.Delay(10);
+        Assert.False(_workflow.TrySetQuantity(A, 4, out _));          // đang lưu: không đổi nữa
+
+        _history.Gate.SetResult(true);
+        await weighing;
+        Assert.Equal(3, _history.Rows[A].Quantity);
+    }
+
+    [Fact]
     public async Task Unknown_second_po_drops_the_first_so_the_weight_is_never_saved_for_the_wrong_po()
     {
         await _workflow.HandleCodeAsync(A);

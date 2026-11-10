@@ -36,6 +36,9 @@ Quét lại đúng mã vừa cân xong = cân lại PO đó. Cùng một mã đ�
    và **cùng custno** (tính từ `ZGLOBAL_CODE` như truy vấn PO, không phân biệt hoa thường) thì ghép thành một gói: cân **một lần**, số cân chia cho từng PO theo
    `GAMNG` (pcs) — ví dụ PO 521 (3 pcs) + PO 522 (2 pcs) cân 25 kg → 521 = 15 kg, 522 = 10 kg. Phần dư làm tròn dồn vào PO cuối. Dung sai so **tổng cân** với
    **tổng khối lượng chuẩn** của cả gói (một cảnh báo, một file log JSON). Khác custno, thiếu custno hoặc quá thời gian thì giữ quy tắc PO quét sau cùng.
+   **Chỉnh số lượng:** khi PO đang chờ cân, ô *Số lượng* (mỗi PO một ô) sửa được nếu số thực tế khác master (`GAMNG`). Số đã sửa được dùng để tính khối lượng
+   chuẩn, chia số cân theo pcs và **lưu vào cột `GAMNG` của lịch sử**; thông báo sau khi cân ghi rõ "Số lượng đã chỉnh: 521 3→4 pcs". Gõ sai (rỗng, chữ, ≤ 0) thì ô báo đỏ
+   và giữ số hợp lệ gần nhất. Không sửa được khi đang lưu hoặc sau khi cân xong. Nhấn Enter ở ô số lượng để quay về ô quét mã.
 5. Khối lượng chuẩn = `round(NW/Qty, 3) × số lượng`; lệch quá `max(dung sai kg, dung sai %)` thì cảnh báo và ghi file JSON log.
 6. Mất kết nối SQL: lưu tạm trên máy (`pending.jsonl`) và tự đồng bộ mỗi 30 giây.
 7. Thu nhỏ xuống góc màn hình: cửa sổ nhỏ luôn nổi hiện số kg, mã PO, trạng thái và thông báo; hộp thông báo thường tự đóng sau 3 giây

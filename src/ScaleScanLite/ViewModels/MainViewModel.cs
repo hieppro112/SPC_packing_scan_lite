@@ -61,6 +61,7 @@ internal sealed partial class MainViewModel : ObservableObject, IDisposable
         _scanner = scanner;
         _demoFeeder = demoFeeder;
         _ui = Application.Current.Dispatcher;
+        PoItems.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasPoItems));
 
         _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
         _refreshTimer.Tick += async (_, _) =>
@@ -109,8 +110,15 @@ internal sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] private string _phcd = "—";
     [ObservableProperty] private string _phtx = "—";
     [ObservableProperty] private string _pstx = "—";
-    [ObservableProperty] private string _quantityText = "—";
     [ObservableProperty] private string _expectedKgText = "—";
+
+    /// <summary>Số lượng (pcs) của các PO đang chờ cân; người dùng được chỉnh nếu khác master.</summary>
+    public ObservableCollection<PoQuantityItem> PoItems { get; } = new();
+
+    /// <summary>Có PO đang chờ cân: hiện danh sách PO để chỉnh số lượng.</summary>
+    public bool HasPoItems => PoItems.Count > 0;
+
+    private readonly Dictionary<string, double> _masterQuantities = new();
 
     // ---------- Kết quả cân gần nhất ----------
     [ObservableProperty] private bool _hasLastResult;
@@ -280,7 +288,7 @@ internal sealed partial class MainViewModel : ObservableObject, IDisposable
         Phcd = Dash(po.Phcd);
         Phtx = Dash(po.Phtx);
         Pstx = Dash(po.Pstx);
-        QuantityText = po.Quantity.ToString("0.###");
+        SetQuantityItems(new[] { po });
         ScanTime = DateTime.Now.ToString("HH:mm:ss");
         IsWeightStable = false;
 
@@ -288,18 +296,45 @@ internal sealed partial class MainViewModel : ObservableObject, IDisposable
         ExpectedKgText = expected is double e ? $"{e:0.###} kg" : "Chưa có dữ liệu";
     }
 
+    /// <summary>Dựng lại danh sách ô số lượng (mỗi PO một ô) để người dùng chỉnh khi số lượng thực tế khác master.</summary>
+    private void SetQuantityItems(IReadOnlyList<PoInfo> pos)
+    {
+        PoItems.Clear();
+        foreach (var po in pos)
+        {
+            // Giữ số lượng master gốc khi PO được ghép vào gói sau khi đã chỉnh số lượng.
+            double master = _masterQuantities.TryGetValue(po.Aufnr, out var m) ? m : po.Quantity;
+            _masterQuantities[po.Aufnr] = master;
+            PoItems.Add(new PoQuantityItem(po, master, pos.Count > 1, ApplyQuantity));
+        }
+    }
+
+    /// <summary>Người dùng gõ số lượng mới cho một PO: chuyển cho workflow và cập nhật khối lượng chuẩn hiển thị.</summary>
+    private bool ApplyQuantity(string aufnr, double quantity)
+    {
+        if (!_workflow.TrySetQuantity(aufnr, quantity, out var expected))
+            return false;
+
+        ExpectedKgText = expected is double e
+            ? $"{e:0.###} kg{(PoItems.Count > 1 ? " (cả gói)" : "")}"
+            : "Chưa có dữ liệu";
+        return true;
+    }
+
     /// <summary>Gói nhiều PO cùng custno: hiện đủ các PO, tổng số pcs và tổng khối lượng chuẩn của cả gói.</summary>
     private void ApplyGroup(IReadOnlyList<PoInfo> members, double? expectedTotal)
     {
         PoCode = string.Join(" + ", members.Select(m => m.Aufnr));
-        QuantityText = string.Join(" + ", members.Select(m => m.Quantity.ToString("0.###"))) + " pcs";
+        SetQuantityItems(members);
         ExpectedKgText = expectedTotal is double e ? $"{e:0.###} kg (cả gói)" : "Chưa có dữ liệu";
     }
 
     /// <summary>Cân xong / PO bị thay / hết giờ chờ: xóa thông tin PO, chờ quét PO mới (giữ số cân và kết quả gần nhất).</summary>
     private void ClearPoInfo()
     {
-        PoCode = Phcd = Phtx = Pstx = QuantityText = ExpectedKgText = "—";
+        PoCode = Phcd = Phtx = Pstx = ExpectedKgText = "—";
+        PoItems.Clear();
+        _masterQuantities.Clear();
         IsWeightStable = false;
     }
 
@@ -307,7 +342,9 @@ internal sealed partial class MainViewModel : ObservableObject, IDisposable
     {
         LastCode = "—";
         ScanTime = "—";
-        PoCode = Phcd = Phtx = Pstx = QuantityText = ExpectedKgText = "—";
+        PoCode = Phcd = Phtx = Pstx = ExpectedKgText = "—";
+        PoItems.Clear();
+        _masterQuantities.Clear();
         WeightText = "0.000";
         IsWeightStable = false;
     }

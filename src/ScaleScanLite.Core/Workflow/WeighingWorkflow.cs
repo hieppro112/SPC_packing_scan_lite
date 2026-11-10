@@ -50,6 +50,7 @@ public sealed class WeighingWorkflow
     private WorkflowState _state = WorkflowState.Idle;
     private PoInfo? _currentPo;
     private readonly List<PoInfo> _group = new();   // các PO cùng gói đang chờ cân; PO cuối = _currentPo
+    private readonly Dictionary<string, double> _master = new();   // số lượng gốc (master) của từng PO trong gói
     private DateTime _lastScanAt = DateTime.MinValue;
     private string? _lookingUp;
     private string? _queuedCode;
@@ -101,6 +102,38 @@ public sealed class WeighingWorkflow
     public PoInfo? CurrentPo
     {
         get { lock (_gate) return _currentPo; }
+    }
+
+    /// <summary>
+    /// Người dùng chỉnh số lượng (pcs) của một PO đang chờ cân vì số lượng thực tế khác master. Số đã chỉnh được dùng để
+    /// tính khối lượng chuẩn, chia số cân (gói nhiều PO) và lưu vào lịch sử. Chỉ chỉnh được khi đang chờ cân.
+    /// Trả về khối lượng chuẩn mới (cả gói nếu là gói nhiều PO; null nếu thiếu dữ liệu đóng gói).
+    /// </summary>
+    public bool TrySetQuantity(string aufnr, double quantity, out double? expectedKg)
+    {
+        expectedKg = null;
+        if (!(quantity > 0) || double.IsInfinity(quantity) || quantity > 1_000_000)
+            return false;
+
+        lock (_gate)
+        {
+            if (_state != WorkflowState.WaitingForWeight)
+                return false;
+
+            int index = _group.FindIndex(p => string.Equals(p.Aufnr, aufnr, StringComparison.Ordinal));
+            if (index < 0)
+                return false;
+
+            var updated = _group[index] with { Quantity = quantity };
+            _group[index] = updated;
+            if (string.Equals(_currentPo?.Aufnr, aufnr, StringComparison.Ordinal))
+                _currentPo = updated;
+
+            expectedKg = _group.Count > 1
+                ? ExpectedTotal(_group)
+                : WeightCalculator.ExpectedKg(updated.NetWeight, updated.PackQty, updated.Quantity);
+            return true;
+        }
     }
 
     /// <summary>Gọi mỗi khi quét hoặc nhập một mã PO.</summary>
@@ -206,6 +239,9 @@ public sealed class WeighingWorkflow
 
             joined = prior != null && SameCustomer(prior, po);
             members = joined ? new List<PoInfo>(prior!) { po } : new List<PoInfo> { po };
+            if (!joined)
+                _master.Clear();
+            _master[po.Aufnr] = po.Quantity;   // số lượng theo master; người dùng có thể chỉnh sau (TrySetQuantity)
             _group.Clear();
             _group.AddRange(members);
             _currentPo = po;
@@ -317,15 +353,19 @@ public sealed class WeighingWorkflow
     {
         PoInfo po;
         List<PoInfo> group;
+        Dictionary<string, double> masters;
         lock (_gate)
         {
             po = _currentPo!;
             group = _group.ToList();
+            masters = new Dictionary<string, double>(_master);
         }
+
+        string editNote = EditedNote(group, masters);
 
         if (group.Count > 1)
         {
-            await SaveGroupAsync(group, kg, gen).ConfigureAwait(false);
+            await SaveGroupAsync(group, kg, gen, editNote).ConfigureAwait(false);
             return;
         }
 
@@ -370,19 +410,19 @@ public sealed class WeighingWorkflow
             catch (Exception ex) { _log?.Invoke("Ghi log lệch cân lỗi: " + ex.Message); }
 
             Notify(NoticeLevel.Warning,
-                $"Lệch khối lượng PO {po.Aufnr}: cân {kg:0.###} kg, chuẩn {check.Expected:0.###} kg (cho phép ±{check.Allowed:0.###} kg){updatedNote}.");
+                $"Lệch khối lượng PO {po.Aufnr}: cân {kg:0.###} kg, chuẩn {check.Expected:0.###} kg (cho phép ±{check.Allowed:0.###} kg){updatedNote}.{editNote}");
         }
         else if (updated)
         {
             Notify(NoticeLevel.Info, saved.PreviousKg is double p
-                ? $"Đã cập nhật cân mới cho PO {po.Aufnr}: {kg:0.###} kg (trước đó {p:0.###} kg)."
-                : $"Đã cập nhật cân mới cho PO {po.Aufnr}: {kg:0.###} kg.");
+                ? $"Đã cập nhật cân mới cho PO {po.Aufnr}: {kg:0.###} kg (trước đó {p:0.###} kg).{editNote}"
+                : $"Đã cập nhật cân mới cho PO {po.Aufnr}: {kg:0.###} kg.{editNote}");
         }
         else if (saved.Result == SaveResult.Saved)
         {
             Notify(NoticeLevel.Success, check is null
-                ? $"Đã cân {kg:0.###} kg (không có khối lượng chuẩn để so sánh)."
-                : $"Đã cân {kg:0.###} kg.");
+                ? $"Đã cân {kg:0.###} kg (không có khối lượng chuẩn để so sánh).{editNote}"
+                : $"Đã cân {kg:0.###} kg.{editNote}");
         }
 
         Raise(() => Completed?.Invoke(new WeighingOutcome(po, kg, saved.Result, check, saved.PreviousKg)));
@@ -396,7 +436,7 @@ public sealed class WeighingWorkflow
     /// Lưu một gói nhiều PO cùng custno: một lần cân, số cân chia cho từng PO theo pcs (PO nhiều pcs nhận nhiều kg hơn).
     /// Dung sai so tổng cân với tổng khối lượng chuẩn của cả gói.
     /// </summary>
-    private async Task SaveGroupAsync(List<PoInfo> group, double totalKg, int gen)
+    private async Task SaveGroupAsync(List<PoInfo> group, double totalKg, int gen, string editNote)
     {
         _scale.StopPolling();
         var s = _settings();
@@ -463,12 +503,12 @@ public sealed class WeighingWorkflow
                 catch (Exception ex) { _log?.Invoke("Ghi log lệch cân lỗi: " + ex.Message); }
 
                 Notify(NoticeLevel.Warning,
-                    $"Lệch khối lượng gói {names}: cân {totalKg:0.###} kg, chuẩn {check.Expected:0.###} kg (cho phép ±{check.Allowed:0.###} kg). Đã chia: {breakdown}.{updatedNote}");
+                    $"Lệch khối lượng gói {names}: cân {totalKg:0.###} kg, chuẩn {check.Expected:0.###} kg (cho phép ±{check.Allowed:0.###} kg). Đã chia: {breakdown}.{updatedNote}{editNote}");
             }
             else
             {
                 Notify(updatedParts.Count > 0 ? NoticeLevel.Info : NoticeLevel.Success,
-                    $"Đã cân {totalKg:0.###} kg cho {saved.Count} PO: {breakdown}.{updatedNote}");
+                    $"Đã cân {totalKg:0.###} kg cho {saved.Count} PO: {breakdown}.{updatedNote}{editNote}");
             }
 
             var overall = saved.Any(x => x.Result == SaveResult.Queued) ? SaveResult.Queued
@@ -570,6 +610,16 @@ public sealed class WeighingWorkflow
         var cust = po.CustNo?.Trim();
         return !string.IsNullOrEmpty(cust)
             && group.All(p => string.Equals(p.CustNo?.Trim(), cust, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>Ghi chú các PO có số lượng bị chỉnh khác master, ví dụ " Số lượng đã chỉnh: 521 3→4 pcs."; rỗng nếu không có.</summary>
+    private static string EditedNote(IEnumerable<PoInfo> group, IReadOnlyDictionary<string, double> masters)
+    {
+        var parts = group
+            .Where(p => masters.TryGetValue(p.Aufnr, out var m) && Math.Abs(m - p.Quantity) > 1e-9)
+            .Select(p => $"{p.Aufnr} {masters[p.Aufnr]:0.###}→{p.Quantity:0.###} pcs")
+            .ToList();
+        return parts.Count == 0 ? "" : $" Số lượng đã chỉnh: {string.Join(", ", parts)}.";
     }
 
     private static double? ExpectedTotal(IReadOnlyList<PoInfo> group)
