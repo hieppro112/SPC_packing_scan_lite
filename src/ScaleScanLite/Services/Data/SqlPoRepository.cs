@@ -14,7 +14,7 @@ SELECT TOP (1)
     REQ_HED.PHCD,
     REQ_HED.PHTX,
     REQ_HED.PSTX,
-    REQ_HED.GAMNG,
+    CAST(ISNULL(ASSIST.AMNT, 0) - ISNULL(ASSIST.BADCNT, 0) AS INT) AS GoodQty,
     Packing.NW,
     Packing.Qty,
     CASE
@@ -26,6 +26,8 @@ SELECT TOP (1)
 FROM [dbo].[MANUFA_F_PD_DT_REQ_HED] AS REQ_HED
 LEFT JOIN [dbo].[MANUFA_F_PD_DT_ORDER_DTL] AS dtl
     ON dtl.VBELN = REQ_HED.KDAUF
+LEFT JOIN [MANUFASPCPD].[dbo].[MANUFA_F_PD_DT_ASSIST] ASSIST
+	ON ASSIST.AUFNR = REQ_HED.AUFNR
 LEFT JOIN [F2Database].[dbo].[F2_PackingList_Main] AS Packing
     ON Packing.PoNo LIKE '%' + CASE
         WHEN dtl.RRONYU1 IN ('KJS', 'KJK', 'KJS_TK', 'ERC', 'WRC', 'CRC', 'FJS')
@@ -58,7 +60,7 @@ WHERE REQ_HED.AUFNR = @id;";
                 Phcd: Text(reader, "PHCD"),
                 Phtx: Text(reader, "PHTX"),
                 Pstx: Text(reader, "PSTX"),
-                Quantity: Number(reader, "GAMNG"),
+                Quantity: Number(reader, "GoodQty"),
                 NetWeight: Number(reader, "NW"),
                 PackQty: (int)Math.Round(Number(reader, "Qty")),
                 CustNo: Text(reader, "CUSTNO"));

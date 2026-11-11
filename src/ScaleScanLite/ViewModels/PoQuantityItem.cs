@@ -21,6 +21,7 @@ internal sealed partial class PoQuantityItem : ObservableObject
         Aufnr = po.Aufnr;
         Description = string.Join(" · ", new[] { po.Phcd, po.Phtx, po.Pstx }.Where(x => !string.IsNullOrWhiteSpace(x)));
         MasterQuantity = masterQuantity;
+        Quantity = po.Quantity;
         ShowLabel = showLabel;
         _apply = apply;
         _lastValidText = Format(po.Quantity);
@@ -35,6 +36,9 @@ internal sealed partial class PoQuantityItem : ObservableObject
     public string Description { get; }
 
     public double MasterQuantity { get; }
+
+    /// <summary>Số lượng hợp lệ đang áp dụng cho PO này (số master hoặc số đã chỉnh); cửa sổ mini hiển thị số này.</summary>
+    public double Quantity { get; set; }
 
     /// <summary>Số lượng ban đầu theo master, luôn hiển thị để so với số lượng đã chỉnh.</summary>
     public string MasterText => Format(MasterQuantity);

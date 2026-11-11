@@ -61,7 +61,11 @@ internal sealed partial class MainViewModel : ObservableObject, IDisposable
         _scanner = scanner;
         _demoFeeder = demoFeeder;
         _ui = Application.Current.Dispatcher;
-        PoItems.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasPoItems));
+        PoItems.CollectionChanged += (_, _) =>
+        {
+            OnPropertyChanged(nameof(HasPoItems));
+            OnPropertyChanged(nameof(QuantitySummary));
+        };
 
         _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
         _refreshTimer.Tick += async (_, _) =>
@@ -117,6 +121,11 @@ internal sealed partial class MainViewModel : ObservableObject, IDisposable
 
     /// <summary>Có PO đang chờ cân: hiện danh sách PO để chỉnh số lượng.</summary>
     public bool HasPoItems => PoItems.Count > 0;
+
+    /// <summary>Số lượng đang áp dụng để hiện ở cửa sổ mini, ví dụ "300 pcs" hoặc "300 + 200 pcs" khi là gói nhiều PO.</summary>
+    public string QuantitySummary => PoItems.Count == 0
+        ? ""
+        : string.Join(" + ", PoItems.Select(i => i.Quantity.ToString("0.###"))) + " pcs";
 
     private readonly Dictionary<string, double> _masterQuantities = new();
 
@@ -314,6 +323,11 @@ internal sealed partial class MainViewModel : ObservableObject, IDisposable
     {
         if (!_workflow.TrySetQuantity(aufnr, quantity, out var expected))
             return false;
+
+        var item = PoItems.FirstOrDefault(i => i.Aufnr == aufnr);
+        if (item != null)
+            item.Quantity = quantity;
+        OnPropertyChanged(nameof(QuantitySummary));
 
         ExpectedKgText = expected is double e
             ? $"{e:0.###} kg{(PoItems.Count > 1 ? " (cả gói)" : "")}"
