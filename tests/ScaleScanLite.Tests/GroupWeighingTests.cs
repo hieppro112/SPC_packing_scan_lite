@@ -41,7 +41,7 @@ public class GroupWeighingTests
     private readonly FakeErrorLog _errors = new();
     private readonly WeighingSettings _settings = new()
     {
-        StableCount = 2, StableSpreadKg = 0.01, MinWeightKg = 0.1, ToleranceKg = 0.05, TolerancePercent = 0, GroupWindowSeconds = 5
+        StableCount = 2, StableSpreadKg = 0.01, MinWeightKg = 0.1, ToleranceKg = 0.05, TolerancePercent = 0, GroupWindowSeconds = 5, DeductPerPo = 0
     };
     private readonly List<WorkflowNotice> _notices = new();
     private readonly List<WeighingOutcome> _outcomes = new();
@@ -302,6 +302,72 @@ public class GroupWeighingTests
         _history.Gate.SetResult(true);
         await weighing;
         Assert.Equal(3, _history.Rows[A].Quantity);
+    }
+
+    [Fact]
+    public void Deduction_per_po_defaults_to_5_like_the_old_hard_coded_value()
+        => Assert.Equal(5, new WeighingSettings().DeductPerPo);
+
+    [Fact]
+    public async Task A_single_po_saves_the_weight_minus_one_deduction()
+    {
+        _settings.DeductPerPo = 1;
+        await _workflow.HandleCodeAsync(A);              // chuẩn 15
+        await Weigh(15);
+
+        Assert.Equal(14, _history.Rows[A].Kg);           // lưu 15 − 1
+        Assert.Empty(_errors.Items);                     // dung sai so với số cân thô (15 = chuẩn 15)
+    }
+
+    [Fact]
+    public async Task A_group_deducts_per_po_times_the_number_of_sheets_before_splitting_by_pcs()
+    {
+        _settings.DeductPerPo = 1;
+        await _workflow.HandleCodeAsync(A);              // 3 pcs
+        _now = _now.AddSeconds(1);
+        await _workflow.HandleCodeAsync(B);              // 2 pcs
+        await Weigh(27);                                 // 27 − 1×2 = 25 → 15 / 10
+
+        Assert.Equal(15, _history.Rows[A].Kg);
+        Assert.Equal(10, _history.Rows[B].Kg);
+        Assert.Contains(_notices, n => n.Message.Contains("Đã trừ 2 (1 × 2 PO)"));
+    }
+
+    [Fact]
+    public async Task A_group_of_three_deducts_three_times()
+    {
+        _settings.DeductPerPo = 5;
+        await _workflow.HandleCodeAsync(A);
+        _now = _now.AddSeconds(1);
+        await _workflow.HandleCodeAsync(B);
+        _now = _now.AddSeconds(1);
+        await _workflow.HandleCodeAsync(C);
+        await Weigh(65);                                 // 65 − 5×3 = 50 → 15 / 10 / 25
+
+        Assert.Equal(new[] { 15.0, 10.0, 25.0 }, new[] { _history.Rows[A].Kg, _history.Rows[B].Kg, _history.Rows[C].Kg });
+    }
+
+    [Fact]
+    public async Task Tolerance_still_uses_the_raw_scale_weight_not_the_deducted_one()
+    {
+        _settings.DeductPerPo = 1;
+        await _workflow.HandleCodeAsync(A);
+        _now = _now.AddSeconds(1);
+        await _workflow.HandleCodeAsync(B);
+        await Weigh(25);                                 // thô 25 = chuẩn 25 → đạt; số lưu 23
+
+        Assert.Empty(_errors.Items);
+        Assert.Equal(23, _history.Rows.Values.Sum(r => r.Kg), 3);
+    }
+
+    [Fact]
+    public async Task Deduction_never_makes_the_saved_weight_negative()
+    {
+        _settings.DeductPerPo = 5;
+        await _workflow.HandleCodeAsync(A);
+        await Weigh(2);
+
+        Assert.Equal(0, _history.Rows[A].Kg);
     }
 
     [Fact]
