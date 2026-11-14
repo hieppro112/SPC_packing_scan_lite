@@ -20,6 +20,9 @@ internal sealed partial class MainViewModel : ObservableObject, IDisposable
 {
     private const int NotifyWindowSeconds = 3;
 
+    /// <summary>Cửa sổ mini phủ hoạt ảnh "đặt hàng lên cân" trong khoảng này mỗi khi tra PO thành công, rồi trở về bình thường.</summary>
+    private const int PlaceHintSeconds = 2;
+
     /// <summary>Cùng một mã đến từ hai đường (ô nhập đang được chọn và Raw Input) trong khoảng này chỉ tính một lần.</summary>
     private const int DuplicateWindowMs = 1500;
 
@@ -34,6 +37,7 @@ internal sealed partial class MainViewModel : ObservableObject, IDisposable
     private readonly Dispatcher _ui;
     private readonly DispatcherTimer _refreshTimer;
     private readonly DispatcherTimer _toastTimer;
+    private readonly DispatcherTimer _placeHintTimer;
     private CancellationTokenSource? _loadCts;
     private readonly object _submitLock = new();
     private string _lastSubmittedCode = "";
@@ -64,6 +68,8 @@ internal sealed partial class MainViewModel : ObservableObject, IDisposable
         PoItems.CollectionChanged += (_, _) =>
         {
             OnPropertyChanged(nameof(HasPoItems));
+            OnPropertyChanged(nameof(HasGroup));
+            OnPropertyChanged(nameof(GroupBadgeText));
             OnPropertyChanged(nameof(QuantitySummary));
         };
 
@@ -74,6 +80,9 @@ internal sealed partial class MainViewModel : ObservableObject, IDisposable
                 await LoadPageAsync(CurrentPage);
             UpdatePending();
         };
+
+        _placeHintTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(PlaceHintSeconds) };
+        _placeHintTimer.Tick += (_, _) => HidePlaceHint();
 
         _toastTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(NotifyWindowSeconds) };
         _toastTimer.Tick += (_, _) =>
@@ -121,6 +130,16 @@ internal sealed partial class MainViewModel : ObservableObject, IDisposable
 
     /// <summary>Có PO đang chờ cân: hiện danh sách PO để chỉnh số lượng.</summary>
     public bool HasPoItems => PoItems.Count > 0;
+
+    /// <summary>Nhiều PO cùng gói đang chờ cân: cửa sổ mini hiện nhãn để người dùng biết mình đang bắn nhiều PO.</summary>
+    public bool HasGroup => PoItems.Count > 1;
+
+    public string GroupBadgeText => PoItems.Count > 1 ? $"GÓI {PoItems.Count} PO" : "";
+
+    /// <summary>true trong ~2 giây sau khi tra PO thành công: cửa sổ mini phủ hoạt ảnh nhắc đặt hàng lên cân.</summary>
+    [ObservableProperty] private bool _isPlaceHintVisible;
+
+    [ObservableProperty] private string _placeHintText = "ĐẶT HÀNG LÊN CÂN";
 
     /// <summary>Số lượng đang áp dụng để hiện ở cửa sổ mini, ví dụ "300 pcs" hoặc "300 + 200 pcs" khi là gói nhiều PO.</summary>
     public string QuantitySummary => PoItems.Count == 0
@@ -298,11 +317,26 @@ internal sealed partial class MainViewModel : ObservableObject, IDisposable
         Phtx = Dash(po.Phtx);
         Pstx = Dash(po.Pstx);
         SetQuantityItems(new[] { po });
+        ShowPlaceHint("ĐẶT HÀNG LÊN CÂN");
         ScanTime = DateTime.Now.ToString("HH:mm:ss");
         IsWeightStable = false;
 
         var expected = WeightCalculator.ExpectedKg(po.NetWeight, po.PackQty, po.Quantity);
         ExpectedKgText = expected is double e ? $"{e:0.###} kg" : "Chưa có dữ liệu";
+    }
+
+    private void ShowPlaceHint(string text)
+    {
+        PlaceHintText = text;
+        IsPlaceHintVisible = true;
+        _placeHintTimer.Stop();
+        _placeHintTimer.Start();
+    }
+
+    private void HidePlaceHint()
+    {
+        _placeHintTimer.Stop();
+        IsPlaceHintVisible = false;
     }
 
     /// <summary>Dựng lại danh sách ô số lượng (mỗi PO một ô) để người dùng chỉnh khi số lượng thực tế khác master.</summary>
@@ -340,6 +374,7 @@ internal sealed partial class MainViewModel : ObservableObject, IDisposable
     {
         PoCode = string.Join(" + ", members.Select(m => m.Aufnr));
         SetQuantityItems(members);
+        ShowPlaceHint($"ĐẶT {members.Count} SHEET LÊN CÂN");
         ExpectedKgText = expectedTotal is double e ? $"{e:0.###} kg (cả gói)" : "Chưa có dữ liệu";
     }
 
@@ -349,6 +384,7 @@ internal sealed partial class MainViewModel : ObservableObject, IDisposable
         PoCode = Phcd = Phtx = Pstx = ExpectedKgText = "—";
         PoItems.Clear();
         _masterQuantities.Clear();
+        HidePlaceHint();
         IsWeightStable = false;
     }
 
@@ -359,6 +395,7 @@ internal sealed partial class MainViewModel : ObservableObject, IDisposable
         PoCode = Phcd = Phtx = Pstx = ExpectedKgText = "—";
         PoItems.Clear();
         _masterQuantities.Clear();
+        HidePlaceHint();
         WeightText = "0.000";
         IsWeightStable = false;
     }
@@ -620,6 +657,7 @@ internal sealed partial class MainViewModel : ObservableObject, IDisposable
         _disposed = true;
         _refreshTimer.Stop();
         _toastTimer.Stop();
+        _placeHintTimer.Stop();
         _loadCts?.Cancel();
         _demoFeeder?.Dispose();
     }

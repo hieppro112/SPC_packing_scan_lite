@@ -120,6 +120,15 @@ public partial class App : Application
         if (arg != null && int.TryParse(arg["--selftest=".Length..], out var parsed))
             seconds = Math.Clamp(parsed, 5, 300);
 
+        // Giữa chừng chuyển sang chế độ thu nhỏ để kiểm tra luôn cửa sổ mini (nếu XAML mini lỗi thì tự kiểm tra thất bại).
+        var compactTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(Math.Max(2, seconds / 3.0)) };
+        compactTimer.Tick += (_, _) =>
+        {
+            compactTimer.Stop();
+            _services!.GetRequiredService<MainViewModel>().CompactCommand.Execute(null);
+        };
+        compactTimer.Start();
+
         var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(seconds) };
         timer.Tick += (_, _) =>
         {
