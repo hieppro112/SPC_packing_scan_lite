@@ -49,6 +49,12 @@ public sealed class WeighingSettings
     /// chia số cân theo số pcs. 0 = tắt, luôn lấy PO quét sau cùng.
     /// </summary>
     public int GroupWindowSeconds { get; set; } = 5;
+
+    /// <summary>
+    /// Số trừ cho MỖI PO (mỗi sheet) trước khi lưu — bì giấy/tem, cùng đơn vị với số cân trên cân. Mặc định 5 (như bản cũ trừ cứng 5).
+    /// Gói nhiều PO cân một lần thì trừ <c>DeductPerPo × số PO</c> khỏi tổng số cân rồi mới chia theo pcs. 0 = không trừ.
+    /// </summary>
+    public double DeductPerPo { get; set; } = 5;
 }
 
 /// <summary>Máy quét barcode USB (chế độ bàn phím). Scale Pro chỉ "nghe" thêm, không chặn phím gửi tới app khác.</summary>

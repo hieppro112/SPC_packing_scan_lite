@@ -342,7 +342,7 @@ public class WorkflowRescanTests
         poRepo.Data[Po] = new PoInfo(Po, "P", "H", "L", 2, 30, 3);
         var history = new FakeHistory();
         var workflow = new WeighingWorkflow(poRepo, history, new FakeScale(), new FakeErrorLog(), new FakePending(),
-            () => new WeighingSettings { StableCount = 2, StableSpreadKg = 0.01, MinWeightKg = 0.1 });
+            () => new WeighingSettings { StableCount = 2, StableSpreadKg = 0.01, MinWeightKg = 0.1, DeductPerPo = 0 });
 
         await workflow.HandleCodeAsync(Po);
         await workflow.OnScaleReadingAsync(20);

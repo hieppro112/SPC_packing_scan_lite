@@ -90,7 +90,7 @@ public class WorkflowTests
     private readonly FakeScale _scale = new();
     private readonly FakeErrorLog _errors = new();
     private readonly FakePending _pending = new();
-    private readonly WeighingSettings _settings = new() { StableCount = 3, StableSpreadKg = 0.01, MinWeightKg = 0.1, ToleranceKg = 0.05, TolerancePercent = 0 };
+    private readonly WeighingSettings _settings = new() { StableCount = 3, StableSpreadKg = 0.01, MinWeightKg = 0.1, ToleranceKg = 0.05, TolerancePercent = 0, DeductPerPo = 0 };
     private readonly List<WorkflowNotice> _notices = new();
     private readonly List<WeighingOutcome> _outcomes = new();
     private readonly List<string> _loaded = new();
