@@ -52,6 +52,7 @@ public sealed class WeighingWorkflow
     private readonly List<PoInfo> _group = new();   // các PO cùng gói đang chờ cân; PO cuối = _currentPo
     private readonly Dictionary<string, double> _master = new();   // số lượng gốc (master) của từng PO trong gói
     private DateTime _lastScanAt = DateTime.MinValue;
+    private DateTime _lastLightWarnAt = DateTime.MinValue;
     private string? _lookingUp;
     private string? _queuedCode;
     private double _lastReading;
@@ -279,6 +280,7 @@ public sealed class WeighingWorkflow
         bool stable;
         double value;
         int gen;
+        string? tooLight = null;
 
         lock (_gate)
         {
@@ -287,12 +289,21 @@ public sealed class WeighingWorkflow
 
             _lastReading = kg;
             stable = _stability.Add(kg, out value);
+
+            // Số lưu = số cân trừ phần bì của các PO; không lưu nếu kết quả từ 0 trở xuống.
+            if (stable && value - DeductFor(_settings(), _group.Count) <= 0)
+            {
+                stable = false;
+                tooLight = TooLightMessage(value, _group.Count);
+            }
+
             if (stable)
                 _state = WorkflowState.Saving;
             gen = _generation;
         }
 
         Raise(() => WeightChanged?.Invoke(kg, stable));
+        WarnTooLight(tooLight);
 
         if (stable)
         {
@@ -308,14 +319,32 @@ public sealed class WeighingWorkflow
         double reading;
         int gen;
         bool ok;
+        string? lightMessage = null;
 
         lock (_gate)
         {
             reading = _lastReading;
             gen = _generation;
-            ok = _state == WorkflowState.WaitingForWeight && reading >= s.MinWeightKg;
+            ok = _state == WorkflowState.WaitingForWeight && reading > 0 && reading >= s.MinWeightKg;
+            string? tooLight = null;
+            if (ok && reading - DeductFor(s, _group.Count) <= 0)
+            {
+                ok = false;
+                tooLight = TooLightMessage(reading, _group.Count);
+            }
+
             if (ok)
                 _state = WorkflowState.Saving;
+            else if (tooLight != null)
+            {
+                lightMessage = tooLight;
+            }
+        }
+
+        if (lightMessage != null)
+        {
+            Notify(NoticeLevel.Warning, lightMessage);   // bấm tay thì luôn báo, không giới hạn tần suất
+            return;
         }
 
         if (!ok)
@@ -612,6 +641,36 @@ public sealed class WeighingWorkflow
         }
 
         Raise(() => StateChanged?.Invoke(WorkflowState.Idle));
+    }
+
+    /// <summary>Phần trừ tổng cộng: DeductPerPo × số PO (mỗi sheet một lần).</summary>
+    private static double DeductFor(WeighingSettings s, int poCount)
+        => Math.Max(0, s.DeductPerPo) * Math.Max(1, poCount);
+
+    private string TooLightMessage(double raw, int poCount)
+    {
+        var s = _settings();
+        double deduct = DeductFor(s, poCount);
+        return deduct > 0
+            ? $"Số cân {raw:0.###} không lớn hơn phần trừ {deduct:0.###} ({Math.Max(0, s.DeductPerPo):0.###} × {Math.Max(1, poCount)} PO) nên không lưu. Hãy kiểm tra hàng trên cân."
+            : $"Số cân {raw:0.###} phải lớn hơn 0 nên không lưu. Hãy kiểm tra hàng trên cân.";
+    }
+
+    /// <summary>Báo số cân quá nhẹ; cân đọc liên tục nên tối đa 3 giây một lần để không làm rối thông báo.</summary>
+    private void WarnTooLight(string? message)
+    {
+        if (message == null)
+            return;
+
+        lock (_gate)
+        {
+            var now = _clock();
+            if ((now - _lastLightWarnAt).TotalSeconds < 3)
+                return;
+            _lastLightWarnAt = now;
+        }
+
+        Notify(NoticeLevel.Warning, message);
     }
 
     /// <summary>Cùng custno (không rỗng, không phân biệt hoa thường) với mọi PO trong gói đang chờ.</summary>

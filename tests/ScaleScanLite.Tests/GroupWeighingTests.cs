@@ -361,13 +361,81 @@ public class GroupWeighingTests
     }
 
     [Fact]
-    public async Task Deduction_never_makes_the_saved_weight_negative()
+    public async Task A_weight_not_greater_than_the_deduction_is_rejected_and_the_po_keeps_waiting()
     {
         _settings.DeductPerPo = 5;
         await _workflow.HandleCodeAsync(A);
-        await Weigh(2);
+        await Weigh(5);                                  // 5 − 5 = 0: không lưu
 
-        Assert.Equal(0, _history.Rows[A].Kg);
+        Assert.Empty(_history.Saved);
+        Assert.Equal(WorkflowState.WaitingForWeight, _workflow.State);
+        var warning = Assert.Single(_notices, n => n.Level == NoticeLevel.Warning);
+        Assert.Contains("không lớn hơn phần trừ", warning.Message);
+
+        await Weigh(20);                                 // đặt hàng đúng: lưu 15
+        Assert.Equal(15, _history.Rows[A].Kg);
+    }
+
+    [Fact]
+    public async Task A_group_weight_not_greater_than_the_total_deduction_is_rejected()
+    {
+        _settings.DeductPerPo = 5;
+        await _workflow.HandleCodeAsync(A);
+        _now = _now.AddSeconds(1);
+        await _workflow.HandleCodeAsync(B);
+        await Weigh(10);                                 // 10 − 5×2 = 0: không lưu
+
+        Assert.Empty(_history.Saved);
+        Assert.Equal(WorkflowState.WaitingForWeight, _workflow.State);
+        Assert.Contains(_notices, n => n.Message.Contains("5 × 2 PO"));
+    }
+
+    [Fact]
+    public async Task Zero_or_negative_readings_are_never_saved_even_when_the_minimum_is_zero()
+    {
+        _settings.MinWeightKg = 0;
+        _settings.DeductPerPo = 0;
+        await _workflow.HandleCodeAsync(A);
+        await Weigh(0);
+        await Weigh(-1);
+
+        Assert.Empty(_history.Saved);
+        Assert.Equal(WorkflowState.WaitingForWeight, _workflow.State);
+    }
+
+    [Fact]
+    public async Task Confirm_button_refuses_zero_and_a_weight_below_the_deduction()
+    {
+        _settings.MinWeightKg = 0;
+        _settings.DeductPerPo = 5;
+        await _workflow.HandleCodeAsync(A);
+
+        await _workflow.OnScaleReadingAsync(0);
+        await _workflow.ConfirmAsync();
+        Assert.Empty(_history.Saved);
+
+        await _workflow.OnScaleReadingAsync(3);
+        await _workflow.ConfirmAsync();
+        Assert.Empty(_history.Saved);
+        Assert.Contains(_notices, n => n.Message.Contains("không lớn hơn phần trừ"));
+        Assert.Equal(WorkflowState.WaitingForWeight, _workflow.State);
+
+        await _workflow.OnScaleReadingAsync(20);
+        await _workflow.ConfirmAsync();
+        Assert.Equal(15, _history.Rows[A].Kg);
+    }
+
+    [Fact]
+    public void Stability_detector_never_accepts_zero_or_negative_values()
+    {
+        var detector = new ScaleScanLite.Core.Logic.StabilityDetector(2, 0.01, 0);
+        Assert.False(detector.Add(0, out _));
+        Assert.False(detector.Add(0, out _));
+        Assert.False(detector.Add(-2, out _));
+        Assert.False(detector.Add(-2, out _));
+        Assert.False(detector.Add(1, out _));
+        Assert.True(detector.Add(1, out var value));
+        Assert.Equal(1, value);
     }
 
     [Fact]

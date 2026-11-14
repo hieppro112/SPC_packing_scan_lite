@@ -37,7 +37,8 @@ public sealed class StabilityDetector
             return false;
 
         stableValue = Math.Round(sum / _window.Count, 3);
-        return stableValue >= _minWeight;
+        // Không bao giờ coi số cân từ 0 trở xuống là ổn định, kể cả khi ngưỡng tối thiểu cấu hình bằng 0.
+        return stableValue > 0 && stableValue >= _minWeight;
     }
 
     public void Reset() => _window.Clear();
