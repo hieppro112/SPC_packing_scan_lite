@@ -181,16 +181,16 @@ public class GroupWeighingTests
     }
 
     [Fact]
-    public async Task Tolerance_compares_the_total_with_the_sum_of_expected_weights_and_logs_once()
+    public async Task Tolerance_compares_the_total_with_the_sum_of_expected_weights_logs_once_and_stays_off_screen()
     {
         await _workflow.HandleCodeAsync(A);
         _now = _now.AddSeconds(1);
         await _workflow.HandleCodeAsync(B);
         await Weigh(27);                                     // chuẩn 25, lệch 2 kg
 
-        Assert.Single(_errors.Items);
-        var warning = Assert.Single(_notices, n => n.Level == NoticeLevel.Warning);
-        Assert.Contains("Lệch khối lượng gói", warning.Message);
+        Assert.Single(_errors.Items);                        // một file log cho cả gói
+        Assert.DoesNotContain(_notices, n => n.Level == NoticeLevel.Warning || n.Message.Contains("Lệch"));
+        Assert.Contains(_notices, n => n.Level == NoticeLevel.Success && n.Message.Contains("Đã cân 27 kg cho 2 PO"));
         Assert.Equal(27, _history.Rows.Values.Sum(r => r.Kg), 3);
     }
 
@@ -330,7 +330,7 @@ public class GroupWeighingTests
 
         Assert.Equal(15, _history.Rows[A].Kg);
         Assert.Equal(10, _history.Rows[B].Kg);
-        Assert.Contains(_notices, n => n.Message.Contains("Đã trừ 2 (1 × 2 PO)"));
+        Assert.Contains(_notices, n => n.Message.Contains("Đã cân 27 kg cho 2 PO"));
     }
 
     [Fact]

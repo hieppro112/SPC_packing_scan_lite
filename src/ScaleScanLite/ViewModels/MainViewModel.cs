@@ -400,40 +400,32 @@ internal sealed partial class MainViewModel : ObservableObject, IDisposable
         IsWeightStable = false;
     }
 
+    /// <summary>Kết quả cân gần nhất: chỉ báo đã cân bao nhiêu kg (lệch khối lượng chuẩn không hiện lên màn hình, chỉ ghi log).</summary>
     private void ShowLastResult(WeighingOutcome outcome)
     {
-        string update = outcome.Result == SaveResult.Updated && outcome.PreviousKg is double prev
-            ? $" (đã cập nhật cân mới, trước đó {prev:0.###} kg)"
-            : "";
+        string text;
+        NoticeLevel level;
 
         if (outcome.Group is { Count: > 1 } group)
         {
             string parts = string.Join(", ", group.Select(g => $"{g.Aufnr} = {g.Kg:0.###} kg"));
-            var (gText, gLevel) = outcome.Result switch
+            (text, level) = outcome.Result switch
             {
-                SaveResult.Queued => ($"Gói {group.Count} PO {outcome.Kg:0.###} kg ({parts}) - mất kết nối SQL, đã lưu tạm trên máy.", NoticeLevel.Warning),
-                _ when outcome.Check is { WithinTolerance: false } c =>
-                    ($"Gói {group.Count} PO: cân {outcome.Kg:0.###} kg, chuẩn {c.Expected:0.###} kg (lệch {c.Difference:+0.###;-0.###}). Đã chia: {parts}.", NoticeLevel.Warning),
+                SaveResult.Queued => ($"Gói {group.Count} PO: đã cân {outcome.Kg:0.###} kg ({parts}) - mất kết nối SQL, đã lưu tạm trên máy.", NoticeLevel.Warning),
                 SaveResult.Updated => ($"Gói {group.Count} PO: cập nhật cân mới {outcome.Kg:0.###} kg ({parts}).", NoticeLevel.Info),
-                _ => ($"Gói {group.Count} PO: {outcome.Kg:0.###} kg ({parts}).", NoticeLevel.Success)
+                _ => ($"Gói {group.Count} PO: đã cân {outcome.Kg:0.###} kg ({parts}).", NoticeLevel.Success)
             };
-            LastResultText = gText;
-            LastResultLevel = gLevel;
-            HasLastResult = true;
-            return;
         }
-
-        var (text, level) = outcome.Result switch
+        else
         {
-            SaveResult.Queued => ($"PO {outcome.Po.Aufnr}: {outcome.Kg:0.###} kg - mất kết nối SQL, đã lưu tạm trên máy.", NoticeLevel.Warning),
-            _ when outcome.Check is { WithinTolerance: false } c =>
-                ($"PO {outcome.Po.Aufnr}: cân {outcome.Kg:0.###} kg, chuẩn {c.Expected:0.###} kg (lệch {c.Difference:+0.###;-0.###}){update}.", NoticeLevel.Warning),
-            SaveResult.Updated =>
-                ($"PO {outcome.Po.Aufnr}: cập nhật cân mới {outcome.Kg:0.###} kg{(outcome.PreviousKg is double p ? $" (trước đó {p:0.###} kg)" : "")}.", NoticeLevel.Info),
-            _ when outcome.Check is { } c =>
-                ($"PO {outcome.Po.Aufnr}: {outcome.Kg:0.###} kg - đúng khối lượng chuẩn {c.Expected:0.###} kg.", NoticeLevel.Success),
-            _ => ($"PO {outcome.Po.Aufnr}: {outcome.Kg:0.###} kg - đã lưu (không có khối lượng chuẩn để so sánh).", NoticeLevel.Success)
-        };
+            (text, level) = outcome.Result switch
+            {
+                SaveResult.Queued => ($"PO {outcome.Po.Aufnr}: đã cân {outcome.Kg:0.###} kg - mất kết nối SQL, đã lưu tạm trên máy.", NoticeLevel.Warning),
+                SaveResult.Updated =>
+                    ($"PO {outcome.Po.Aufnr}: cập nhật cân mới {outcome.Kg:0.###} kg{(outcome.PreviousKg is double p ? $" (trước đó {p:0.###} kg)" : "")}.", NoticeLevel.Info),
+                _ => ($"PO {outcome.Po.Aufnr}: đã cân {outcome.Kg:0.###} kg.", NoticeLevel.Success)
+            };
+        }
 
         LastResultText = text;
         LastResultLevel = level;
