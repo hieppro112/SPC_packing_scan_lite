@@ -139,7 +139,7 @@ public class WorkflowTests
     }
 
     [Fact]
-    public async Task Mismatch_is_saved_but_logged_and_warned()
+    public async Task Mismatch_is_saved_and_logged_to_file_but_not_shown_on_screen()
     {
         await _workflow.HandleCodeAsync(Po);
         await Feed(25.0, 25.0, 25.0);
@@ -147,7 +147,9 @@ public class WorkflowTests
         Assert.Single(_history.Saved);
         Assert.Single(_errors.Items);
         Assert.False(_errors.Items[0].Check.WithinTolerance);
-        Assert.Contains(_notices, n => n.Level == NoticeLevel.Warning && n.Message.Contains("Lệch"));
+        Assert.DoesNotContain(_notices, n => n.Message.Contains("Lệch"));
+        Assert.DoesNotContain(_notices, n => n.Level == NoticeLevel.Warning);
+        Assert.Contains(_notices, n => n.Level == NoticeLevel.Success && n.Message.Contains("Đã cân 25 kg"));
         Assert.Equal(SaveResult.Saved, _outcomes.Single().Result);
     }
 
@@ -325,17 +327,18 @@ public class WorkflowTests
     }
 
     [Fact]
-    public async Task An_updated_weight_outside_the_tolerance_still_warns_and_mentions_the_update()
+    public async Task An_updated_weight_outside_the_tolerance_shows_only_the_update_notice()
     {
         _history.Rows[Po] = new WeighingRecord(1, Po, "P1", "Hàng A", "Loại X", 2, 20.0, new DateTime(2026, 10, 6));
 
         await _workflow.HandleCodeAsync(Po);
         await Feed(25, 25, 25);
 
-        Assert.Single(_errors.Items);
-        var notice = Assert.Single(_notices, n => n.Level == NoticeLevel.Warning);
-        Assert.Contains("Lệch", notice.Message);
-        Assert.Contains("đã cập nhật cân mới", notice.Message);
+        Assert.Single(_errors.Items);                    // vẫn ghi log file
+        var notice = Assert.Single(_notices);
+        Assert.Equal(NoticeLevel.Info, notice.Level);
+        Assert.Contains("cập nhật cân mới", notice.Message);
+        Assert.DoesNotContain("Lệch", notice.Message);
         Assert.Equal(25, _history.Rows[Po].Kg);
     }
     [Fact]

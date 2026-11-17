@@ -403,7 +403,6 @@ public sealed class WeighingWorkflow
         // Số lưu = số cân trừ phần bì của PO; so dung sai vẫn dùng số cân thô.
         double deduct = Math.Max(0, s.DeductPerPo);
         double savedKg = Math.Max(0, Math.Round(kg - deduct, 3));
-        string deductNote = deduct > 0 ? $" Số lưu {savedKg:0.###} sau khi trừ {deduct:0.###}." : "";
         var record = new WeighingRecord(0, po.Aufnr, po.Phcd, po.Phtx, po.Pstx, po.Quantity, savedKg, _clock());
 
         WeightCheckResult? check = null;
@@ -432,30 +431,22 @@ public sealed class WeighingWorkflow
             return;
         }
 
-        bool updated = saved.Result == SaveResult.Updated;
-        string updatedNote = updated && saved.PreviousKg is double prev
-            ? $" (đã cập nhật cân mới, trước đó {prev:0.###} kg)"
-            : "";
-
+        // Lệch khối lượng chuẩn chỉ ghi file log JSON, không báo lên màn hình.
         if (check is { WithinTolerance: false })
         {
             try { _errorLog.WriteMismatch(record, po, check); }
             catch (Exception ex) { _log?.Invoke("Ghi log lệch cân lỗi: " + ex.Message); }
-
-            Notify(NoticeLevel.Warning,
-                $"Lệch khối lượng PO {po.Aufnr}: cân {kg:0.###} kg, chuẩn {check.Expected:0.###} kg (cho phép ±{check.Allowed:0.###} kg){updatedNote}.{editNote}{deductNote}");
         }
-        else if (updated)
+
+        if (saved.Result == SaveResult.Updated)
         {
             Notify(NoticeLevel.Info, saved.PreviousKg is double p
-                ? $"Đã cập nhật cân mới cho PO {po.Aufnr}: {kg:0.###} kg (trước đó {p:0.###} kg).{editNote}{deductNote}"
-                : $"Đã cập nhật cân mới cho PO {po.Aufnr}: {kg:0.###} kg.{editNote}{deductNote}");
+                ? $"Đã cập nhật cân mới cho PO {po.Aufnr}: {kg:0.###} kg (trước đó {p:0.###} kg).{editNote}"
+                : $"Đã cập nhật cân mới cho PO {po.Aufnr}: {kg:0.###} kg.{editNote}");
         }
         else if (saved.Result == SaveResult.Saved)
         {
-            Notify(NoticeLevel.Success, check is null
-                ? $"Đã cân {kg:0.###} kg (không có khối lượng chuẩn để so sánh).{editNote}{deductNote}"
-                : $"Đã cân {kg:0.###} kg.{editNote}{deductNote}");
+            Notify(NoticeLevel.Success, $"Đã cân {kg:0.###} kg.{editNote}");
         }
 
         Raise(() => Completed?.Invoke(new WeighingOutcome(po, kg, saved.Result, check, saved.PreviousKg)));
@@ -477,9 +468,6 @@ public sealed class WeighingWorkflow
         // Mỗi sheet (PO) trừ DeductPerPo: trừ DeductPerPo × số PO khỏi tổng số cân rồi mới chia theo pcs.
         double deduct = Math.Max(0, s.DeductPerPo) * group.Count;
         double netKg = Math.Max(0, Math.Round(totalKg - deduct, 3));
-        string deductNote = deduct > 0
-            ? $" Đã trừ {deduct:0.###} ({Math.Max(0, s.DeductPerPo):0.###} × {group.Count} PO), số lưu tổng {netKg:0.###}."
-            : "";
         var shares = WeightSplitter.Split(netKg, group.Select(p => p.Quantity).ToList());
 
         WeightCheckResult? check = null;
@@ -538,17 +526,13 @@ public sealed class WeighingWorkflow
                     Quantity = group.Sum(p => p.Quantity)
                 };
                 var combinedRecord = new WeighingRecord(0, names, first.Phcd, first.Phtx, first.Pstx, combinedPo.Quantity, totalKg, now);
+                // Lệch khối lượng chuẩn chỉ ghi file log JSON, không báo lên màn hình.
                 try { _errorLog.WriteMismatch(combinedRecord, combinedPo, check); }
                 catch (Exception ex) { _log?.Invoke("Ghi log lệch cân lỗi: " + ex.Message); }
+            }
 
-                Notify(NoticeLevel.Warning,
-                    $"Lệch khối lượng gói {names}: cân {totalKg:0.###} kg, chuẩn {check.Expected:0.###} kg (cho phép ±{check.Allowed:0.###} kg). Đã chia: {breakdown}.{deductNote}{updatedNote}{editNote}");
-            }
-            else
-            {
-                Notify(updatedParts.Count > 0 ? NoticeLevel.Info : NoticeLevel.Success,
-                    $"Đã cân {totalKg:0.###} kg cho {saved.Count} PO: {breakdown}.{deductNote}{updatedNote}{editNote}");
-            }
+            Notify(updatedParts.Count > 0 ? NoticeLevel.Info : NoticeLevel.Success,
+                $"Đã cân {totalKg:0.###} kg cho {saved.Count} PO: {breakdown}.{updatedNote}{editNote}");
 
             var overall = saved.Any(x => x.Result == SaveResult.Queued) ? SaveResult.Queued
                 : saved.Any(x => x.Result == SaveResult.Updated) ? SaveResult.Updated
